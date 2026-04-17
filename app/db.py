@@ -50,6 +50,7 @@ def init_db(settings: Settings) -> None:
             ON case_results(run_id)
             """
         )
+        _ensure_column(connection, "case_results", "sample_index", "INTEGER NOT NULL DEFAULT 0")
 
 
 def create_run(settings: Settings, run_id: str, status: str, created_at: str, request_payload: dict[str, Any]) -> None:
@@ -111,8 +112,9 @@ def insert_case_result(settings: Settings, payload: dict[str, Any]) -> None:
                 response_text,
                 evaluation_json,
                 raw_json,
+                sample_index,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload["run_id"],
@@ -126,6 +128,7 @@ def insert_case_result(settings: Settings, payload: dict[str, Any]) -> None:
                 payload["response_text"],
                 _dump_json(payload["evaluation"]),
                 _dump_json(payload["raw"]),
+                payload.get("sample_index", 0),
                 payload["created_at"],
             ),
         )
@@ -160,10 +163,10 @@ def get_run(settings: Settings, run_id: str) -> dict[str, Any] | None:
 
         result_rows = connection.execute(
             """
-            SELECT provider_name, provider_model, case_id, case_title, status, score, latency_ms, response_text, evaluation_json, raw_json, created_at
+            SELECT provider_name, provider_model, case_id, case_title, status, score, latency_ms, response_text, evaluation_json, raw_json, sample_index, created_at
             FROM case_results
             WHERE run_id = ?
-            ORDER BY provider_name ASC, case_id ASC
+            ORDER BY provider_name ASC, case_id ASC, sample_index ASC
             """,
             (run_id,),
         ).fetchall()
@@ -205,6 +208,7 @@ def _decode_case_result(row: sqlite3.Row) -> dict[str, Any]:
         "response_text": row["response_text"],
         "evaluation": _load_json(row["evaluation_json"]),
         "raw": _load_json(row["raw_json"]),
+        "sample_index": row["sample_index"],
         "created_at": row["created_at"],
     }
 
@@ -218,3 +222,12 @@ def _load_json(raw_value: str | None) -> Any:
         return None
     return json.loads(raw_value)
 
+
+def _ensure_column(connection: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:
+    columns = {
+        row["name"]
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name in columns:
+        return
+    connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")

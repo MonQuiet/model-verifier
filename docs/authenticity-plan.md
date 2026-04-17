@@ -14,11 +14,10 @@ The target is not absolute proof. The target is a reproducible confidence judgme
 
 ## Current Gap
 
-The current implementation can detect obvious drift, but it still has three structural limits:
+The current implementation now covers weighted scoring, baseline pairing, and repeat sampling. The remaining structural limits are:
 
-1. All checks are effectively equal, which makes severe safety drift and minor formatting drift too close in score impact.
-2. There is no signal grouping, so the system cannot say whether a provider failed on `safety`, `context`, or `structured output`.
-3. There is no baseline comparison yet, so the result is still “rule conformance” rather than “authenticity confidence”.
+1. There is still no API-level evidence such as `usage`, `finish_reason`, or content-block/tool-call protocol shape.
+2. The web review surface still under-explains the evidence trail compared with the richer backend summary.
 
 ## Roadmap
 
@@ -46,7 +45,7 @@ Deliverables:
 
 ### Step 3: Repeat Sampling
 
-Status: `pending`
+Status: `completed`
 
 Deliverables:
 
@@ -117,3 +116,25 @@ Impact:
 
 - the system can now distinguish “this provider is internally weak” from “this provider diverges from its claimed reference”
 - reports now expose a concrete mismatch trail that is closer to real authenticity review work
+
+### 2026-04-17: Step 3 Completed
+
+Implemented:
+
+- `sample_count` support in CLI, service layer, and HTTP API
+- repeated execution of each selected case per provider
+- case-level stability summaries with `stable`, `style_variance`, `moderate_variance`, and `high_variance`
+- stability-adjusted provider scoring and classification
+- baseline comparison that now includes repeated-sample pass-rate and stability drift
+- deterministic `mock-flaky-gateway` coverage for regression tests
+
+Verified with:
+
+- `python3 -m unittest discover -s tests`
+- `python3 -m app.cli --providers mock-clean-gateway,mock-flaky-gateway --cases json_contract,context_memory,refusal_boundary,tool_plan_json --samples 3`
+
+Impact:
+
+- the system can now separate “single-run looked fine” from “behavior stays consistent across repeated probes”
+- flaky upstream behavior now leaves a concrete trail: pass-rate drift, check flips, and stability penalties
+- the next step can add protocol evidence on top of a stronger behavioral baseline instead of a single-shot sample

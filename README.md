@@ -30,7 +30,7 @@ The scoring model now uses weighted evidence and critical-signal gates. That mea
 
 ## Authenticity Roadmap
 
-The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Steps 1 and 2 are complete and establish:
+The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Steps 1 through 3 are complete and establish:
 
 - case-level signal groups
 - per-check weights
@@ -38,6 +38,8 @@ The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/mode
 - critical-signal-aware classification
 - baseline pairing between upstream and reference providers
 - per-case and per-signal deltas against the configured baseline
+- repeat sampling with case-level stability summaries
+- stability-adjusted scoring for flaky upstream providers
 
 ## Project Layout
 
@@ -73,12 +75,21 @@ cd /home/debian/git/model-verifier
 python3 -m app.cli
 ```
 
-The sample provider file includes two deterministic mock providers:
+The sample provider file includes deterministic and intentionally unstable mock providers:
 
 - `mock-reference-gpt41`
+- `mock-clean-gateway`
 - `mock-suspect-gateway`
+- `mock-flaky-gateway`
 
 This lets you generate reports without external network access.
+
+To exercise repeat sampling explicitly:
+
+```bash
+cd /home/debian/git/model-verifier
+python3 -m app.cli --providers mock-clean-gateway,mock-flaky-gateway --cases json_contract,context_memory,refusal_boundary,tool_plan_json --samples 3
+```
 
 ### 2. Start the web UI
 
@@ -126,6 +137,13 @@ Provider definitions live in `providers.sample.json`. Mock providers are include
 The backend calls `POST {base_url}/chat/completions` and expects an OpenAI-compatible response shape.
 
 If `baseline_provider` is set, the run automatically includes that baseline provider, computes signal-level deltas, and records per-case mismatch reasons.
+
+If you pass `--samples N` in the CLI or `sample_count` in `POST /api/runs`, the verifier repeats each selected case `N` times and records:
+
+- pass-rate drift across repeated samples
+- check-level flips such as `json_required` or `required_keys`
+- case stability states: `stable`, `style_variance`, `moderate_variance`, `high_variance`
+- stability-adjusted provider scores for final classification
 
 ## API Surface
 

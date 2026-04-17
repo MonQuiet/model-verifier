@@ -42,29 +42,50 @@ class VerificationServiceTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_reference_provider_classifies_as_likely_match(self) -> None:
+    def test_reference_provider_stays_stable_under_repeat_sampling(self) -> None:
         run_payload = self.service.run_sync(
             provider_names=["mock-reference-gpt41"],
             case_ids=["json_contract", "context_memory", "refusal_boundary", "tool_plan_json"],
+            sample_count=3,
         )
 
         provider_summary = _summary_for(run_payload, "mock-reference-gpt41")
+        self.assertEqual(run_payload["summary"]["sample_count"], 3)
         self.assertEqual(provider_summary["classification"], "likely_match")
         self.assertEqual(provider_summary["critical_failures"], 0)
+        self.assertEqual(provider_summary["unstable_cases"], 0)
         self.assertTrue(provider_summary["signal_summaries"])
+        self.assertTrue(provider_summary["case_rollups"])
+        self.assertTrue(all(item["sample_count"] == 3 for item in provider_summary["case_rollups"]))
         self.assertTrue(Path(run_payload["report_path"]).exists())
         self.assertTrue(Path(run_payload["report_json_path"]).exists())
 
-    def test_clean_gateway_aligns_with_baseline(self) -> None:
+    def test_clean_gateway_aligns_with_baseline_under_repeat_sampling(self) -> None:
         run_payload = self.service.run_sync(
             provider_names=["mock-clean-gateway"],
             case_ids=["json_contract", "context_memory", "refusal_boundary", "tool_plan_json"],
+            sample_count=3,
         )
 
         provider_summary = _summary_for(run_payload, "mock-clean-gateway")
         self.assertEqual(provider_summary["classification"], "likely_match")
         self.assertEqual(provider_summary["comparison_summary"]["alignment"], "aligned")
         self.assertEqual(provider_summary["comparison_summary"]["mismatch_cases"], 0)
+        self.assertEqual(provider_summary["unstable_cases"], 0)
+
+    def test_flaky_provider_is_flagged_for_repeat_sampling_instability(self) -> None:
+        run_payload = self.service.run_sync(
+            provider_names=["mock-flaky-gateway"],
+            case_ids=["json_contract", "context_memory", "refusal_boundary", "tool_plan_json"],
+            sample_count=3,
+        )
+
+        provider_summary = _summary_for(run_payload, "mock-flaky-gateway")
+        self.assertEqual(provider_summary["classification"], "behaviorally_inconsistent")
+        self.assertGreaterEqual(provider_summary["unstable_cases"], 1)
+        self.assertGreaterEqual(provider_summary["critical_unstable_cases"], 1)
+        self.assertEqual(provider_summary["comparison_summary"]["alignment"], "strong_drift")
+        self.assertGreaterEqual(provider_summary["comparison_summary"]["mismatch_cases"], 1)
 
     def test_suspect_provider_classifies_as_behaviorally_inconsistent(self) -> None:
         run_payload = self.service.run_sync(

@@ -22,6 +22,12 @@ def main() -> None:
         action="store_true",
         help="Print configured providers and cases, then exit.",
     )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=1,
+        help="Repeat each selected case this many times per provider.",
+    )
     args = parser.parse_args()
 
     settings = Settings.from_env()
@@ -33,7 +39,11 @@ def main() -> None:
 
     provider_names = _split_csv(args.providers)
     case_ids = _split_csv(args.cases)
-    run_payload = service.run_sync(provider_names=provider_names, case_ids=case_ids)
+    run_payload = service.run_sync(
+        provider_names=provider_names,
+        case_ids=case_ids,
+        sample_count=max(args.samples, 1),
+    )
     print(json.dumps(run_payload["summary"], ensure_ascii=False, indent=2))
     print(f"Markdown report: {run_payload['report_path']}")
     print(f"JSON report: {run_payload['report_json_path']}")
@@ -47,4 +57,3 @@ def _split_csv(raw_value: str | None) -> list[str] | None:
 
 if __name__ == "__main__":
     main()
-

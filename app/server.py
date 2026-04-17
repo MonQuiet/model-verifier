@@ -87,6 +87,7 @@ class ModelVerifierHandler(BaseHTTPRequestHandler):
                 run_payload = self.server.service.start_run(
                     provider_names=_read_string_list(payload.get("provider_names")),
                     case_ids=_read_string_list(payload.get("case_ids")),
+                    sample_count=_read_sample_count(payload.get("sample_count")),
                 )
                 status_code = self._json_response(202, request_id, run_payload)
             else:
@@ -179,6 +180,14 @@ def _read_string_list(value: Any) -> list[str] | None:
     return value
 
 
+def _read_sample_count(value: Any) -> int:
+    if value is None:
+        return 1
+    if not isinstance(value, int) or value < 1:
+        raise ApiError(400, "Expected sample_count to be a positive integer.")
+    return value
+
+
 def _guess_content_type(file_path: Path) -> str:
     suffix = file_path.suffix.lower()
     if suffix == ".html":
@@ -209,4 +218,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

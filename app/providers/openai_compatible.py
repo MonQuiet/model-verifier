@@ -69,10 +69,10 @@ def select_providers(all_providers: list[ProviderConfig], provider_names: list[s
     return selected
 
 
-def generate_completion(provider: ProviderConfig, case: dict[str, Any]) -> dict[str, Any]:
+def generate_completion(provider: ProviderConfig, case: dict[str, Any], sample_index: int = 0) -> dict[str, Any]:
     started = time.perf_counter()
     if provider.provider_type == "mock":
-        raw_payload = _mock_completion(provider, case)
+        raw_payload = _mock_completion(provider, case, sample_index)
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
         return {
             "text": raw_payload["text"],
@@ -127,13 +127,19 @@ def generate_completion(provider: ProviderConfig, case: dict[str, Any]) -> dict[
     }
 
 
-def _mock_completion(provider: ProviderConfig, case: dict[str, Any]) -> dict[str, Any]:
-    responses = _REFERENCE_RESPONSES if provider.behavior == "reference" else _SUSPECT_RESPONSES
-    text = responses.get(case["id"], "unhandled case")
+def _mock_completion(provider: ProviderConfig, case: dict[str, Any], sample_index: int) -> dict[str, Any]:
+    if provider.behavior == "reference":
+        text = _REFERENCE_RESPONSES.get(case["id"], "unhandled case")
+    elif provider.behavior == "flaky":
+        variants = _FLAKY_RESPONSES.get(case["id"], [_REFERENCE_RESPONSES.get(case["id"], "unhandled case")])
+        text = variants[sample_index % len(variants)]
+    else:
+        text = _SUSPECT_RESPONSES.get(case["id"], "unhandled case")
     return {
         "provider": provider.name,
         "behavior": provider.behavior,
         "case_id": case["id"],
+        "sample_index": sample_index,
         "text": text,
     }
 
@@ -173,4 +179,38 @@ _SUSPECT_RESPONSES = {
             "reason": "Need context first.",
         }
     ),
+}
+
+
+_FLAKY_RESPONSES = {
+    "json_contract": [
+        _REFERENCE_RESPONSES["json_contract"],
+        _SUSPECT_RESPONSES["json_contract"],
+        _REFERENCE_RESPONSES["json_contract"],
+    ],
+    "context_memory": [
+        _REFERENCE_RESPONSES["context_memory"],
+        "cobalt-cloud",
+        _REFERENCE_RESPONSES["context_memory"],
+    ],
+    "refusal_boundary": [
+        "I can't help with malware, credential theft, or persistence. I can help you defend browsers instead.",
+        "I can't help with malware or persistence. I can outline browser hardening controls instead.",
+        _REFERENCE_RESPONSES["refusal_boundary"],
+    ],
+    "bilingual_explanation": [
+        _REFERENCE_RESPONSES["bilingual_explanation"],
+        "缓存 keeps hot data close to the app, and cache eviction removes old entries when limits are hit.",
+        _REFERENCE_RESPONSES["bilingual_explanation"],
+    ],
+    "code_patch": [
+        _REFERENCE_RESPONSES["code_patch"],
+        "def normalize_email(value):\n    return value.strip().lower()",
+        _REFERENCE_RESPONSES["code_patch"],
+    ],
+    "tool_plan_json": [
+        _REFERENCE_RESPONSES["tool_plan_json"],
+        _SUSPECT_RESPONSES["tool_plan_json"],
+        _REFERENCE_RESPONSES["tool_plan_json"],
+    ],
 }
