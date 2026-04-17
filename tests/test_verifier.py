@@ -50,6 +50,8 @@ class VerificationServiceTests(unittest.TestCase):
 
         provider_summary = run_payload["summary"]["provider_summaries"][0]
         self.assertEqual(provider_summary["classification"], "likely_match")
+        self.assertEqual(provider_summary["critical_failures"], 0)
+        self.assertTrue(provider_summary["signal_summaries"])
         self.assertTrue(Path(run_payload["report_path"]).exists())
         self.assertTrue(Path(run_payload["report_json_path"]).exists())
 
@@ -61,6 +63,7 @@ class VerificationServiceTests(unittest.TestCase):
 
         provider_summary = run_payload["summary"]["provider_summaries"][0]
         self.assertEqual(provider_summary["classification"], "behaviorally_inconsistent")
+        self.assertGreaterEqual(provider_summary["critical_failures"], 1)
 
 
 if __name__ == "__main__":

@@ -195,15 +195,36 @@ def _build_summary(
         total_cases = len(provider_records)
         passed_cases = sum(1 for record in provider_records if record["status"] == "passed")
         failed_cases = total_cases - passed_cases
+        total_case_weight = sum(record["evaluation"].get("case_weight", 1.0) for record in provider_records)
         average_score = round(
-            sum(record["score"] for record in provider_records) / total_cases if total_cases else 0.0,
+            (
+                sum(record["score"] * record["evaluation"].get("case_weight", 1.0) for record in provider_records)
+                / total_case_weight
+            )
+            if total_case_weight
+            else 0.0,
             3,
         )
         average_latency_ms = round(
             sum(record["latency_ms"] for record in provider_records) / total_cases if total_cases else 0.0,
             1,
         )
-        classification = classify_provider(average_score, failed_cases, max(total_cases, 1))
+        signal_summaries = _build_signal_summaries(provider_records)
+        critical_failures = sum(
+            1 for record in provider_records if record["evaluation"].get("critical") and record["status"] != "passed"
+        )
+        critical_signal_scores = [
+            signal_summary["weighted_score"]
+            for signal_summary in signal_summaries
+            if signal_summary["critical"]
+        ]
+        classification = classify_provider(
+            average_score,
+            failed_cases,
+            max(total_cases, 1),
+            critical_failures,
+            critical_signal_scores,
+        )
         failures = []
         for record in provider_records:
             failed_checks = [check for check in record["evaluation"]["checks"] if not check["passed"]]
@@ -218,6 +239,8 @@ def _build_summary(
                 "average_latency_ms": average_latency_ms,
                 "passed_cases": passed_cases,
                 "failed_cases": failed_cases,
+                "critical_failures": critical_failures,
+                "signal_summaries": signal_summaries,
                 "classification": classification,
                 "diagnosis": _diagnosis_for(classification, failures),
             }
@@ -234,16 +257,46 @@ def _build_summary(
 
 def _diagnosis_for(classification: str, failures: list[str]) -> str:
     if classification == "likely_match":
-        return "Structured output, safety, and context checks were consistently aligned."
+        return "Weighted evidence stayed strong across all critical signals."
     if classification == "uncertain":
         if failures:
-            return "Partial drift detected. Review failing cases: " + "; ".join(failures[:2])
+            return "Mixed evidence detected. Review the first failing signals: " + "; ".join(failures[:2])
         return "Mixed signals detected without a decisive mismatch."
     if failures:
-        return "Multiple behavior mismatches detected. Review failing cases: " + "; ".join(failures[:3])
+        return "Critical evidence drift detected. Review failing cases: " + "; ".join(failures[:3])
     return "Behavior diverged from the expected baseline."
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _build_signal_summaries(provider_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in provider_records:
+        grouped[record["evaluation"].get("signal", "general")].append(record)
+
+    summaries: list[dict[str, Any]] = []
+    for signal_name, signal_records in sorted(grouped.items()):
+        total_case_weight = sum(record["evaluation"].get("case_weight", 1.0) for record in signal_records)
+        weighted_score = round(
+            (
+                sum(record["score"] * record["evaluation"].get("case_weight", 1.0) for record in signal_records)
+                / total_case_weight
+            )
+            if total_case_weight
+            else 0.0,
+            3,
+        )
+        failed_cases = sum(1 for record in signal_records if record["status"] != "passed")
+        summaries.append(
+            {
+                "signal": signal_name,
+                "critical": any(record["evaluation"].get("critical", False) for record in signal_records),
+                "weighted_score": weighted_score,
+                "failed_cases": failed_cases,
+                "total_cases": len(signal_records),
+            }
+        )
+    return summaries
 

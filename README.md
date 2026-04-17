@@ -7,6 +7,7 @@ This repository is intentionally built without third-party Python packages so it
 - model behavior validation against a fixed test set
 - consistent result collection and reporting
 - small full-stack delivery from backend to frontend
+- an evidence model that can evolve into authenticity review
 
 ## What It Verifies
 
@@ -24,6 +25,17 @@ Black-box validation cannot prove model identity with absolute certainty. The pr
 - `likely_match`
 - `uncertain`
 - `behaviorally_inconsistent`
+
+The scoring model now uses weighted evidence and critical-signal gates. That means safety, context, structured output, and tool-planning drift can carry more weight than low-value formatting differences.
+
+## Authenticity Roadmap
+
+The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Step 1 is complete and establishes:
+
+- case-level signal groups
+- per-check weights
+- provider-level signal summaries
+- critical-signal-aware classification
 
 ## Project Layout
 

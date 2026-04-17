@@ -38,13 +38,13 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
         "",
         "## Provider Summary",
         "",
-        "| Provider | Model | Avg Score | Classification | Passed | Failed |",
-        "| --- | --- | ---: | --- | ---: | ---: |",
+        "| Provider | Model | Weighted Score | Classification | Passed | Failed | Critical Failures |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: |",
     ]
 
     for provider_summary in summary.get("provider_summaries", []):
         lines.append(
-            "| {provider_name} | {provider_model} | {average_score:.2f} | {classification} | {passed_cases} | {failed_cases} |".format(
+            "| {provider_name} | {provider_model} | {average_score:.2f} | {classification} | {passed_cases} | {failed_cases} | {critical_failures} |".format(
                 **provider_summary
             )
         )
@@ -57,11 +57,28 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
                 f"### {provider_name}",
                 "",
                 f"- Classification: `{provider_summary['classification']}`",
-                f"- Avg Score: `{provider_summary['average_score']:.2f}`",
+                f"- Weighted Score: `{provider_summary['average_score']:.2f}`",
+                f"- Critical Failures: `{provider_summary['critical_failures']}`",
                 f"- Diagnosis: {provider_summary['diagnosis']}",
                 "",
             ]
         )
+        signal_summaries = provider_summary.get("signal_summaries", [])
+        if signal_summaries:
+            lines.extend(
+                [
+                    "| Signal | Critical | Weighted Score | Failed Cases |",
+                    "| --- | --- | ---: | ---: |",
+                ]
+            )
+            for signal_summary in signal_summaries:
+                lines.append(
+                    "| {signal} | {critical} | {weighted_score:.2f} | {failed_cases}/{total_cases} |".format(
+                        **signal_summary
+                    )
+                )
+            lines.extend(["", ""])
+
         provider_results = [result for result in results if result["provider_name"] == provider_name]
 
         for result in provider_results:
@@ -72,6 +89,7 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
                     "",
                     f"- Status: `{result['status']}`",
                     f"- Score: `{result['score']:.2f}`",
+                    f"- Signal: `{result['evaluation'].get('signal', 'general')}`",
                     f"- Latency: `{result['latency_ms']} ms`",
                     f"- Goal: {case.get('description', 'No description provided.')}",
                 ]
