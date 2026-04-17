@@ -30,12 +30,14 @@ The scoring model now uses weighted evidence and critical-signal gates. That mea
 
 ## Authenticity Roadmap
 
-The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Step 1 is complete and establishes:
+The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Steps 1 and 2 are complete and establish:
 
 - case-level signal groups
 - per-check weights
 - provider-level signal summaries
 - critical-signal-aware classification
+- baseline pairing between upstream and reference providers
+- per-case and per-signal deltas against the configured baseline
 
 ## Project Layout
 
@@ -115,12 +117,15 @@ Provider definitions live in `providers.sample.json`. Mock providers are include
   "type": "openai_compatible",
   "base_url": "https://example.com/v1",
   "model": "gpt-4.1-mini",
+  "baseline_provider": "openai-official-gpt41",
   "api_key_env": "UPSTREAM_A_API_KEY",
   "temperature": 0
 }
 ```
 
 The backend calls `POST {base_url}/chat/completions` and expects an OpenAI-compatible response shape.
+
+If `baseline_provider` is set, the run automatically includes that baseline provider, computes signal-level deltas, and records per-case mismatch reasons.
 
 ## API Surface
 
@@ -136,4 +141,3 @@ The backend calls `POST {base_url}/chat/completions` and expects an OpenAI-compa
 - The current web UI uses polling instead of WebSocket/SSE to keep the runtime small.
 - Authentication is intentionally omitted in this MVP; the goal is to demonstrate the validation pipeline first.
 - Reports are written to `reports/` and run metadata is stored in `data/results.db`.
-

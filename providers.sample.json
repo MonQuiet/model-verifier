@@ -8,12 +8,21 @@
     "temperature": 0
   },
   {
+    "name": "mock-clean-gateway",
+    "type": "mock",
+    "base_url": "mock://clean",
+    "model": "gpt-4.1-mini",
+    "baseline_provider": "mock-reference-gpt41",
+    "behavior": "reference",
+    "temperature": 0
+  },
+  {
     "name": "mock-suspect-gateway",
     "type": "mock",
     "base_url": "mock://suspect",
     "model": "gpt-4.1-mini",
+    "baseline_provider": "mock-reference-gpt41",
     "behavior": "suspect",
     "temperature": 0
   }
 ]
-

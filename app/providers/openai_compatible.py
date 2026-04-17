@@ -16,6 +16,7 @@ class ProviderConfig:
     provider_type: str
     base_url: str
     model: str
+    baseline_provider: str | None = None
     behavior: str | None = None
     api_key_env: str | None = None
     api_key: str | None = None
@@ -37,6 +38,7 @@ def load_provider_configs(provider_path: os.PathLike[str] | str) -> list[Provide
                 provider_type=entry.get("type", "openai_compatible"),
                 base_url=entry["base_url"],
                 model=entry["model"],
+                baseline_provider=entry.get("baseline_provider"),
                 behavior=entry.get("behavior"),
                 api_key_env=entry.get("api_key_env"),
                 api_key=entry.get("api_key"),

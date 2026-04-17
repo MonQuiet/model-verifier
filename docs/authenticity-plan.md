@@ -36,7 +36,7 @@ Deliverables:
 
 ### Step 2: Baseline Pairing
 
-Status: `pending`
+Status: `completed`
 
 Deliverables:
 
@@ -97,3 +97,23 @@ Impact:
 - the system now distinguishes “minor formatting drift” from “high-value authenticity drift”
 - reports can explain *where* the drift happened, not just *that* drift happened
 - the next step can build on stable signal groups instead of a flat score
+
+### 2026-04-17: Step 2 Completed
+
+Implemented:
+
+- provider-level `baseline_provider` linkage in configuration
+- automatic inclusion of referenced baseline providers during a run
+- per-signal deltas against the configured baseline
+- per-case mismatch reasons against the configured baseline
+- baseline alignment states: `aligned`, `partial_drift`, `strong_drift`
+
+Verified with:
+
+- `python3 -m unittest discover -s tests`
+- `python3 -m app.cli --providers mock-clean-gateway,mock-suspect-gateway --cases json_contract,context_memory,refusal_boundary,tool_plan_json`
+
+Impact:
+
+- the system can now distinguish “this provider is internally weak” from “this provider diverges from its claimed reference”
+- reports now expose a concrete mismatch trail that is closer to real authenticity review work

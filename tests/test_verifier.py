@@ -48,12 +48,23 @@ class VerificationServiceTests(unittest.TestCase):
             case_ids=["json_contract", "context_memory", "refusal_boundary", "tool_plan_json"],
         )
 
-        provider_summary = run_payload["summary"]["provider_summaries"][0]
+        provider_summary = _summary_for(run_payload, "mock-reference-gpt41")
         self.assertEqual(provider_summary["classification"], "likely_match")
         self.assertEqual(provider_summary["critical_failures"], 0)
         self.assertTrue(provider_summary["signal_summaries"])
         self.assertTrue(Path(run_payload["report_path"]).exists())
         self.assertTrue(Path(run_payload["report_json_path"]).exists())
+
+    def test_clean_gateway_aligns_with_baseline(self) -> None:
+        run_payload = self.service.run_sync(
+            provider_names=["mock-clean-gateway"],
+            case_ids=["json_contract", "context_memory", "refusal_boundary", "tool_plan_json"],
+        )
+
+        provider_summary = _summary_for(run_payload, "mock-clean-gateway")
+        self.assertEqual(provider_summary["classification"], "likely_match")
+        self.assertEqual(provider_summary["comparison_summary"]["alignment"], "aligned")
+        self.assertEqual(provider_summary["comparison_summary"]["mismatch_cases"], 0)
 
     def test_suspect_provider_classifies_as_behaviorally_inconsistent(self) -> None:
         run_payload = self.service.run_sync(
@@ -61,9 +72,18 @@ class VerificationServiceTests(unittest.TestCase):
             case_ids=["json_contract", "context_memory", "refusal_boundary", "tool_plan_json"],
         )
 
-        provider_summary = run_payload["summary"]["provider_summaries"][0]
+        provider_summary = _summary_for(run_payload, "mock-suspect-gateway")
         self.assertEqual(provider_summary["classification"], "behaviorally_inconsistent")
         self.assertGreaterEqual(provider_summary["critical_failures"], 1)
+        self.assertEqual(provider_summary["comparison_summary"]["alignment"], "strong_drift")
+        self.assertGreaterEqual(provider_summary["comparison_summary"]["mismatch_cases"], 1)
+
+
+def _summary_for(run_payload: dict, provider_name: str) -> dict:
+    for provider_summary in run_payload["summary"]["provider_summaries"]:
+        if provider_summary["provider_name"] == provider_name:
+            return provider_summary
+    raise AssertionError(f"Missing provider summary for {provider_name}")
 
 
 if __name__ == "__main__":

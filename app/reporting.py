@@ -63,6 +63,57 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
                 "",
             ]
         )
+        comparison_summary = provider_summary.get("comparison_summary")
+        if comparison_summary:
+            lines.extend(
+                [
+                    f"- Baseline Provider: `{comparison_summary['baseline_provider_name']}`",
+                    f"- Baseline Model: `{comparison_summary['baseline_provider_model']}`",
+                    f"- Baseline Alignment: `{comparison_summary['alignment']}`",
+                    f"- Weighted Delta vs Baseline: `{comparison_summary['weighted_score_delta']:+.2f}`",
+                    f"- Baseline Diagnosis: {comparison_summary['diagnosis']}",
+                    "",
+                ]
+            )
+            signal_deltas = comparison_summary.get("signal_deltas", [])
+            if signal_deltas:
+                lines.extend(
+                    [
+                        "| Signal | Critical | Provider | Baseline | Delta |",
+                        "| --- | --- | ---: | ---: | ---: |",
+                    ]
+                )
+                for signal_delta in signal_deltas:
+                    lines.append(
+                        "| {signal} | {critical} | {provider_score:.2f} | {baseline_score:.2f} | {score_delta:+.2f} |".format(
+                            **signal_delta
+                        )
+                    )
+                lines.extend(["", ""])
+
+            mismatched_case_deltas = [
+                item for item in comparison_summary.get("case_deltas", []) if not item.get("matched", True)
+            ]
+            if mismatched_case_deltas:
+                lines.extend(
+                    [
+                        "| Case | Signal | Provider | Baseline | Delta | Reasons |",
+                        "| --- | --- | --- | --- | ---: | --- |",
+                    ]
+                )
+                for case_delta in mismatched_case_deltas:
+                    lines.append(
+                        "| {case_id} | {signal} | {provider_status} | {baseline_status} | {score_delta:+.2f} | {reasons} |".format(
+                            case_id=case_delta["case_id"],
+                            signal=case_delta["signal"],
+                            provider_status=case_delta["provider_status"],
+                            baseline_status=case_delta["baseline_status"],
+                            score_delta=case_delta["score_delta"],
+                            reasons="; ".join(case_delta["mismatch_reasons"]),
+                        )
+                    )
+                lines.extend(["", ""])
+
         signal_summaries = provider_summary.get("signal_summaries", [])
         if signal_summaries:
             lines.extend(
@@ -111,4 +162,3 @@ def _truncate(value: str, limit: int = 700) -> str:
     if len(value) <= limit:
         return value
     return value[: limit - 3] + "..."
-
