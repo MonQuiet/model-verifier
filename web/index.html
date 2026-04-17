@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Model Verifier</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Behavioral Verification Console</p>
+          <h1>Model Verifier</h1>
+          <p class="hero-text">
+            Run a fixed black-box evaluation suite against upstream AI gateways, compare structured behavior, and review
+            confidence signals before trusting the claimed model label.
+          </p>
+        </div>
+        <div class="hero-panel">
+          <div class="stat">
+            <span class="stat-label">Output</span>
+            <strong id="hero-run-count">0 runs</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Mode</span>
+            <strong>Polling + SQLite</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Confidence</span>
+            <strong>likely / uncertain / inconsistent</strong>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel form-panel">
+          <div class="section-head">
+            <h2>Launch Run</h2>
+            <p>Select providers and cases, then start a verification batch.</p>
+          </div>
+          <form id="run-form">
+            <div class="field-group">
+              <div class="field-head">
+                <h3>Providers</h3>
+                <button type="button" class="ghost" data-toggle="providers">Toggle</button>
+              </div>
+              <div id="providers" class="chip-grid"></div>
+            </div>
+
+            <div class="field-group">
+              <div class="field-head">
+                <h3>Cases</h3>
+                <button type="button" class="ghost" data-toggle="cases">Toggle</button>
+              </div>
+              <div id="cases" class="case-grid"></div>
+            </div>
+
+            <div class="actions">
+              <button id="run-button" type="submit" class="primary">Start Verification</button>
+              <span id="run-status" class="inline-note">Idle.</span>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel list-panel">
+          <div class="section-head">
+            <h2>Recent Runs</h2>
+            <p>Open a run to inspect provider scores, failed checks, and raw responses.</p>
+          </div>
+          <div id="runs" class="run-list"></div>
+        </section>
+
+        <section class="panel detail-panel">
+          <div class="section-head">
+            <h2>Run Detail</h2>
+            <p id="detail-subtitle">Select a run to inspect its results.</p>
+          </div>
+          <div id="detail" class="detail-empty">No run selected.</div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
+

@@ -1,0 +1,19 @@
+[
+  {
+    "name": "mock-reference-gpt41",
+    "type": "mock",
+    "base_url": "mock://reference",
+    "model": "gpt-4.1-mini",
+    "behavior": "reference",
+    "temperature": 0
+  },
+  {
+    "name": "mock-suspect-gateway",
+    "type": "mock",
+    "base_url": "mock://suspect",
+    "model": "gpt-4.1-mini",
+    "behavior": "suspect",
+    "temperature": 0
+  }
+]
+
