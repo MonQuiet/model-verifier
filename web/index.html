@@ -40,6 +40,14 @@
             <p>Select providers and cases, then start a verification batch.</p>
           </div>
           <form id="run-form">
+            <div class="control-row">
+              <label class="field-inline" for="sample-count">
+                <span>Samples Per Case</span>
+                <input id="sample-count" name="sample-count" type="number" min="1" max="5" value="1">
+              </label>
+              <p class="inline-note">Use repeat sampling to expose unstable upstream behavior directly from the UI.</p>
+            </div>
+
             <div class="field-group">
               <div class="field-head">
                 <h3>Providers</h3>
@@ -66,7 +74,7 @@
         <section class="panel list-panel">
           <div class="section-head">
             <h2>Recent Runs</h2>
-            <p>Open a run to inspect provider scores, failed checks, and raw responses.</p>
+            <p>Open a run to inspect provider scores, signal summaries, critical findings, and protocol drift.</p>
           </div>
           <div id="runs" class="run-list"></div>
         </section>
@@ -74,7 +82,7 @@
         <section class="panel detail-panel">
           <div class="section-head">
             <h2>Run Detail</h2>
-            <p id="detail-subtitle">Select a run to inspect its results.</p>
+            <p id="detail-subtitle">Select a run to inspect evidence, critical failures, and case-level drift.</p>
           </div>
           <div id="detail" class="detail-empty">No run selected.</div>
         </section>
@@ -84,4 +92,3 @@
     <script src="/app.js" defer></script>
   </body>
 </html>
-

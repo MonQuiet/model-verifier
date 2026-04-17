@@ -14,9 +14,7 @@ The target is not absolute proof. The target is a reproducible confidence judgme
 
 ## Current Gap
 
-The current implementation now covers weighted scoring, baseline pairing, repeat sampling, and protocol evidence. The remaining structural limit is:
-
-1. The web review surface still under-explains the evidence trail compared with the richer backend summary.
+The current implementation now covers weighted scoring, baseline pairing, repeat sampling, protocol evidence, and review UX. The remaining work is iterative refinement rather than a missing core capability.
 
 ## Roadmap
 
@@ -65,7 +63,7 @@ Deliverables:
 
 ### Step 5: Review UX
 
-Status: `pending`
+Status: `completed`
 
 Deliverables:
 
@@ -158,3 +156,24 @@ Impact:
 - the system can now catch gateways that copy the right answer text while exposing the wrong response protocol
 - protocol evidence is now part of the final confidence judgment instead of being hidden in raw payloads
 - the remaining work can focus on review UX rather than backend evidence collection
+
+### 2026-04-17: Step 5 Completed
+
+Implemented:
+
+- explicit `critical_findings` and `evidence_trail` fields in provider summaries
+- markdown reports that now break out evidence trail and critical findings separately
+- web UI controls for `sample_count`
+- web UI provider views for signal summaries, critical findings, baseline comparison, case-level protocol detail, and raw response previews
+
+Verified with:
+
+- `python3 -m unittest discover -s tests`
+- `node --check web/app.js`
+- `python3 -m app.cli --providers mock-reference-gpt41,mock-protocol-gateway --cases json_contract,context_memory,refusal_boundary,tool_plan_json`
+
+Impact:
+
+- reviewers can now see *why* a provider was classified a certain way without reading raw JSON by hand
+- critical failures are separated from lower-priority drift, which makes triage much faster
+- the UI now exposes the same repeat-sampling and evidence concepts that already existed in the backend

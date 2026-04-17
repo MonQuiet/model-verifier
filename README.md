@@ -30,7 +30,7 @@ The scoring model now uses weighted evidence and critical-signal gates. That mea
 
 ## Authenticity Roadmap
 
-The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Steps 1 through 4 are complete and establish:
+The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Steps 1 through 5 are complete and establish:
 
 - case-level signal groups
 - per-check weights
@@ -42,6 +42,7 @@ The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/mode
 - stability-adjusted scoring for flaky upstream providers
 - protocol evidence capture for `usage`, `finish_reason`, content blocks, and `tool_calls`
 - protocol-level drift detection even when response text still looks correct
+- UI evidence views for signals, critical findings, protocol drift, and classification trail
 
 ## Project Layout
 
@@ -176,5 +177,6 @@ This makes it possible to flag gateways that imitate the right text while exposi
 ## Notes
 
 - The current web UI uses polling instead of WebSocket/SSE to keep the runtime small.
+- The web UI now exposes `sample_count`, signal summaries, critical findings, and an explicit evidence trail for each provider classification.
 - Authentication is intentionally omitted in this MVP; the goal is to demonstrate the validation pipeline first.
 - Reports are written to `reports/` and run metadata is stored in `data/results.db`.

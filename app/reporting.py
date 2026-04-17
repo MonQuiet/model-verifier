@@ -88,6 +88,41 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
             ]
         )
 
+        evidence_trail = provider_summary.get("evidence_trail", [])
+        if evidence_trail:
+            lines.extend(["#### Evidence Trail", ""])
+            for entry in evidence_trail:
+                lines.append(
+                    "- `{level}` {title}: {detail}".format(
+                        level=entry.get("level", "neutral"),
+                        title=entry.get("title", "Evidence"),
+                        detail=entry.get("detail", ""),
+                    )
+                )
+            lines.extend(["", ""])
+
+        critical_findings = provider_summary.get("critical_findings", [])
+        if critical_findings:
+            lines.extend(
+                [
+                    "#### Critical Findings",
+                    "",
+                    "| Kind | Severity | Case | Signal | Detail |",
+                    "| --- | --- | --- | --- | --- |",
+                ]
+            )
+            for finding in critical_findings:
+                lines.append(
+                    "| {kind} | {severity} | {case_id} | {signal} | {detail} |".format(
+                        kind=finding["kind"],
+                        severity=finding["severity"],
+                        case_id=finding["case_id"],
+                        signal=finding["signal"],
+                        detail=finding["detail"].replace("|", "/"),
+                    )
+                )
+            lines.extend(["", ""])
+
         comparison_summary = provider_summary.get("comparison_summary")
         if comparison_summary:
             lines.extend(

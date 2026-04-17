@@ -14,6 +14,7 @@ const detailSubtitleEl = document.getElementById("detail-subtitle");
 const runStatusEl = document.getElementById("run-status");
 const heroRunCountEl = document.getElementById("hero-run-count");
 const runButtonEl = document.getElementById("run-button");
+const sampleCountEl = document.getElementById("sample-count");
 
 document.getElementById("run-form").addEventListener("submit", onRunSubmit);
 document.querySelectorAll("[data-toggle]").forEach((button) => {
@@ -117,6 +118,7 @@ async function onRunSubmit(event) {
     body: JSON.stringify({
       provider_names: Array.from(state.selectedProviders),
       case_ids: Array.from(state.selectedCases),
+      sample_count: Math.max(Number(sampleCountEl.value) || 1, 1),
     }),
   });
   const payload = await response.json();
@@ -196,39 +198,11 @@ function renderRunDetail(run) {
   detailSubtitleEl.textContent = `Run ${run.id} created ${run.created_at}`;
 
   const summary = run.summary || { provider_summaries: [] };
-  const providerCards = (summary.provider_summaries || [])
-    .map(
-      (provider) => `
-        <article class="provider-card">
-          <div class="provider-head">
-            <strong>${escapeHtml(provider.provider_name)}</strong>
-            <span class="badge ${escapeHtml(provider.classification)}">${escapeHtml(provider.classification)}</span>
-          </div>
-          <p class="provider-meta">${escapeHtml(provider.provider_model)} · avg score ${provider.average_score.toFixed(2)} · ${provider.average_latency_ms} ms</p>
-          <p class="provider-meta">${escapeHtml(provider.diagnosis)}</p>
-        </article>
-      `
-    )
+  const groupedResults = groupResultsByCase(run.results || []);
+  const providerPanels = (summary.provider_summaries || [])
+    .map((provider) => renderProviderPanel(provider, groupedResults[provider.provider_name] || {}))
     .join("");
-
-  const resultRows = (run.results || [])
-    .map((result) => {
-      const failedChecks = (result.evaluation.checks || [])
-        .filter((item) => !item.passed)
-        .map((item) => `${item.name}: ${item.detail}`)
-        .join(" | ");
-      return `
-        <tr>
-          <td>${escapeHtml(result.provider_name)}</td>
-          <td>${escapeHtml(result.case_id)}</td>
-          <td><span class="badge ${escapeHtml(result.status)}">${escapeHtml(result.status)}</span></td>
-          <td>${Number(result.score).toFixed(2)}</td>
-          <td>${result.latency_ms} ms</td>
-          <td>${escapeHtml(failedChecks || "none")}</td>
-        </tr>
-      `;
-    })
-    .join("");
+  const resultRows = renderResultRows(run.results || []);
 
   detailEl.innerHTML = `
     <div class="summary-row">
@@ -245,6 +219,10 @@ function renderRunDetail(run) {
         <strong>${summary.total_cases || 0}</strong>
       </div>
       <div class="summary-card">
+        <span class="stat-label">Samples</span>
+        <strong>${summary.sample_count || run.request?.sample_count || 1}</strong>
+      </div>
+      <div class="summary-card">
         <span class="stat-label">Report</span>
         ${
           run.report_path
@@ -253,25 +231,390 @@ function renderRunDetail(run) {
         }
       </div>
     </div>
-    <div class="provider-grid">${providerCards || '<div class="detail-empty">No provider summary yet.</div>'}</div>
-    <div class="table-wrap">
+    <div class="provider-detail-list">${providerPanels || '<div class="detail-empty">No provider summary yet.</div>'}</div>
+    <div class="section-block">
+      <div class="section-mini-head">
+        <h3>Attempt Log</h3>
+        <p class="muted">Every provider-case-sample result with failed checks and protocol issues.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Case</th>
+              <th>Sample</th>
+              <th>Status</th>
+              <th>Score</th>
+              <th>Protocol</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${resultRows || '<tr><td colspan="7">No results yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderProviderPanel(provider, groupedCaseResults) {
+  const protocol = provider.protocol_summary || {};
+  const evidenceTrail = renderEvidenceTrail(provider.evidence_trail || []);
+  const criticalFindings = renderCriticalFindings(provider.critical_findings || []);
+  const comparison = renderComparisonSummary(provider.comparison_summary);
+  const signalSummary = renderSignalSummary(provider.signal_summaries || []);
+  const caseCards = (provider.case_rollups || [])
+    .map((caseRollup) => renderCaseCard(caseRollup, groupedCaseResults[caseRollup.case_id] || []))
+    .join("");
+
+  return `
+    <article class="provider-detail-card">
+      <div class="provider-detail-head">
+        <div>
+          <div class="provider-headline">
+            <strong>${escapeHtml(provider.provider_name)}</strong>
+            <span class="badge ${escapeHtml(provider.classification)}">${escapeHtml(provider.classification)}</span>
+          </div>
+          <p class="provider-meta">${escapeHtml(provider.provider_model)} · avg score ${formatNumber(provider.average_score)} · adjusted ${formatNumber(provider.adjusted_score)} · protocol ${formatNumber(protocol.protocol_score || 0)}</p>
+        </div>
+        <div class="provider-chip-row">
+          <span class="mini-pill">${provider.failed_cases} failed</span>
+          <span class="mini-pill">${provider.unstable_cases} unstable</span>
+          <span class="mini-pill">${protocol.alignment || "unknown"} protocol</span>
+          <span class="mini-pill">${provider.sample_count} sample${provider.sample_count > 1 ? "s" : ""}</span>
+        </div>
+      </div>
+
+      <div class="metric-grid">
+        <div class="metric-card">
+          <span class="stat-label">Diagnosis</span>
+          <strong>${escapeHtml(provider.diagnosis)}</strong>
+        </div>
+        <div class="metric-card">
+          <span class="stat-label">Critical Findings</span>
+          <strong>${provider.critical_findings.length}</strong>
+        </div>
+        <div class="metric-card">
+          <span class="stat-label">Protocol Drift Cases</span>
+          <strong>${protocol.flagged_cases || 0}</strong>
+        </div>
+        <div class="metric-card">
+          <span class="stat-label">Critical Unstable</span>
+          <strong>${provider.critical_unstable_cases}</strong>
+        </div>
+      </div>
+
+      <div class="detail-columns">
+        <section class="section-block">
+          <div class="section-mini-head">
+            <h3>Evidence Trail</h3>
+            <p class="muted">The explicit path from raw evidence to the final classification.</p>
+          </div>
+          ${evidenceTrail}
+        </section>
+        <section class="section-block">
+          <div class="section-mini-head">
+            <h3>Critical Findings</h3>
+            <p class="muted">Critical behavior, stability, and protocol issues are broken out separately.</p>
+          </div>
+          ${criticalFindings}
+        </section>
+      </div>
+
+      <div class="detail-columns">
+        <section class="section-block">
+          <div class="section-mini-head">
+            <h3>Signal Summary</h3>
+            <p class="muted">Behavior quality aggregated by signal group.</p>
+          </div>
+          ${signalSummary}
+        </section>
+        <section class="section-block">
+          <div class="section-mini-head">
+            <h3>Baseline Comparison</h3>
+            <p class="muted">Behavior, protocol, and stability deltas versus the configured baseline.</p>
+          </div>
+          ${comparison}
+        </section>
+      </div>
+
+      <div class="case-detail-grid">
+        ${caseCards || '<div class="detail-empty">No case detail available.</div>'}
+      </div>
+    </article>
+  `;
+}
+
+function renderEvidenceTrail(entries) {
+  if (!entries.length) {
+    return '<div class="detail-empty">No evidence trail available.</div>';
+  }
+
+  return `
+    <ol class="evidence-list">
+      ${entries
+        .map(
+          (entry) => `
+            <li class="evidence-item evidence-${escapeHtml(entry.level || "neutral")}">
+              <span class="badge badge-${escapeHtml(entry.level || "neutral")}">${escapeHtml(entry.level || "neutral")}</span>
+              <div>
+                <strong>${escapeHtml(entry.title || "Evidence")}</strong>
+                <p class="muted">${escapeHtml(entry.detail || "")}</p>
+              </div>
+            </li>
+          `
+        )
+        .join("")}
+    </ol>
+  `;
+}
+
+function renderCriticalFindings(findings) {
+  if (!findings.length) {
+    return '<div class="detail-empty">No critical findings.</div>';
+  }
+
+  return `
+    <ul class="finding-list">
+      ${findings
+        .map(
+          (finding) => `
+            <li class="finding-item">
+              <div class="finding-meta">
+                <span class="badge badge-${escapeHtml(finding.severity || "neutral")}">${escapeHtml(finding.severity || "neutral")}</span>
+                <strong>${escapeHtml(finding.case_id)}</strong>
+                <span class="muted">${escapeHtml(finding.kind)} · ${escapeHtml(finding.signal)}</span>
+              </div>
+              <p>${escapeHtml(finding.detail)}</p>
+            </li>
+          `
+        )
+        .join("")}
+    </ul>
+  `;
+}
+
+function renderSignalSummary(signalSummaries) {
+  if (!signalSummaries.length) {
+    return '<div class="detail-empty">No signal summary available.</div>';
+  }
+
+  return `
+    <div class="table-wrap compact-table">
       <table>
         <thead>
           <tr>
-            <th>Provider</th>
-            <th>Case</th>
-            <th>Status</th>
-            <th>Score</th>
-            <th>Latency</th>
-            <th>Notes</th>
+            <th>Signal</th>
+            <th>Critical</th>
+            <th>Adjusted</th>
+            <th>Penalty</th>
+            <th>Failed</th>
+            <th>Unstable</th>
           </tr>
         </thead>
         <tbody>
-          ${resultRows || '<tr><td colspan="6">No results yet.</td></tr>'}
+          ${signalSummaries
+            .map(
+              (signal) => `
+                <tr>
+                  <td>${escapeHtml(signal.signal)}</td>
+                  <td>${signal.critical ? "yes" : "no"}</td>
+                  <td>${formatNumber(signal.adjusted_weighted_score)}</td>
+                  <td>${formatNumber(signal.stability_penalty)}</td>
+                  <td>${signal.failed_cases}/${signal.total_cases}</td>
+                  <td>${signal.unstable_cases}</td>
+                </tr>
+              `
+            )
+            .join("")}
         </tbody>
       </table>
     </div>
   `;
+}
+
+function renderComparisonSummary(comparison) {
+  if (!comparison) {
+    return '<div class="detail-empty">No baseline configured.</div>';
+  }
+
+  const mismatches = (comparison.case_deltas || []).filter((item) => !item.matched).slice(0, 4);
+  return `
+    <div class="comparison-card">
+      <div class="comparison-overview">
+        <span class="badge ${escapeHtml(comparison.alignment)}">${escapeHtml(comparison.alignment)}</span>
+        <strong>${escapeHtml(comparison.baseline_provider_name)}</strong>
+      </div>
+      <p class="muted">${escapeHtml(comparison.diagnosis)}</p>
+      <div class="metric-grid metric-grid-compact">
+        <div class="metric-card">
+          <span class="stat-label">Adjusted Delta</span>
+          <strong>${formatSignedNumber(comparison.weighted_score_delta)}</strong>
+        </div>
+        <div class="metric-card">
+          <span class="stat-label">Protocol Delta</span>
+          <strong>${formatSignedNumber(comparison.protocol_score_delta)}</strong>
+        </div>
+        <div class="metric-card">
+          <span class="stat-label">Mismatched Cases</span>
+          <strong>${comparison.mismatch_cases}</strong>
+        </div>
+      </div>
+      ${
+        mismatches.length
+          ? `
+            <ul class="finding-list compact-findings">
+              ${mismatches
+                .map(
+                  (item) => `
+                    <li class="finding-item">
+                      <div class="finding-meta">
+                        <strong>${escapeHtml(item.case_id)}</strong>
+                        <span class="muted">${escapeHtml(item.provider_protocol_alignment)} vs ${escapeHtml(item.baseline_protocol_alignment)}</span>
+                      </div>
+                      <p>${escapeHtml((item.mismatch_reasons || []).join("; "))}</p>
+                    </li>
+                  `
+                )
+                .join("")}
+            </ul>
+          `
+          : '<div class="detail-empty">No baseline mismatches.</div>'
+      }
+    </div>
+  `;
+}
+
+function renderCaseCard(caseRollup, caseResults) {
+  const protocol = caseRollup.protocol_summary || {};
+  const attemptRows = (caseRollup.attempts || [])
+    .map((attempt) => {
+      const issues = attempt.issues?.length ? attempt.issues.join(", ") : "none";
+      const failedChecks = attempt.failed_checks?.length ? attempt.failed_checks.join(", ") : "none";
+      return `
+        <tr>
+          <td>${attempt.sample_index + 1}</td>
+          <td><span class="badge ${escapeHtml(attempt.status)}">${escapeHtml(attempt.status)}</span></td>
+          <td>${formatNumber(attempt.score)}</td>
+          <td>${formatNumber(attempt.protocol_score)}</td>
+          <td>${escapeHtml(attempt.finish_reason)}</td>
+          <td>${escapeHtml(failedChecks)}</td>
+          <td>${escapeHtml(issues)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const responseBlocks = caseResults
+    .map(
+      (result) => `
+        <div class="response-block">
+          <div class="response-head">
+            <strong>Sample ${result.sample_index + 1}</strong>
+            <span class="muted">${escapeHtml(result.raw?.protocol_evidence?.content_mode || "unknown")} · ${escapeHtml(result.raw?.protocol_evidence?.tool_call_shape || "none")}</span>
+          </div>
+          <pre>${escapeHtml(result.response_text || "")}</pre>
+        </div>
+      `
+    )
+    .join("");
+
+  return `
+    <article class="case-detail-card">
+      <div class="case-detail-head">
+        <div>
+          <strong>${escapeHtml(caseRollup.case_title)}</strong>
+          <p class="muted">${escapeHtml(caseRollup.case_id)} · ${escapeHtml(caseRollup.signal)}</p>
+        </div>
+        <div class="provider-chip-row">
+          <span class="badge ${escapeHtml(caseRollup.status)}">${escapeHtml(caseRollup.status)}</span>
+          <span class="mini-pill">${escapeHtml(caseRollup.stability)}</span>
+          <span class="mini-pill">${escapeHtml(protocol.alignment || "compatible")}</span>
+        </div>
+      </div>
+      <div class="metric-grid metric-grid-compact">
+        <div class="metric-card">
+          <span class="stat-label">Pass Rate</span>
+          <strong>${formatNumber(caseRollup.pass_rate)}</strong>
+        </div>
+        <div class="metric-card">
+          <span class="stat-label">Adjusted</span>
+          <strong>${formatNumber(caseRollup.adjusted_score)}</strong>
+        </div>
+        <div class="metric-card">
+          <span class="stat-label">Protocol</span>
+          <strong>${formatNumber(protocol.protocol_score || 0)}</strong>
+        </div>
+        <div class="metric-card">
+          <span class="stat-label">Issues</span>
+          <strong>${(protocol.issue_types || []).length}</strong>
+        </div>
+      </div>
+      <p class="muted">${escapeHtml(protocol.diagnosis || "No protocol diagnosis available.")}</p>
+      <div class="table-wrap compact-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Sample</th>
+              <th>Status</th>
+              <th>Score</th>
+              <th>Protocol</th>
+              <th>Finish</th>
+              <th>Failed Checks</th>
+              <th>Issues</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${attemptRows || '<tr><td colspan="7">No attempts recorded.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div class="response-stack">
+        ${responseBlocks || '<div class="detail-empty">No response preview available.</div>'}
+      </div>
+    </article>
+  `;
+}
+
+function renderResultRows(results) {
+  return results
+    .map((result) => {
+      const failedChecks = (result.evaluation.checks || [])
+        .filter((item) => !item.passed)
+        .map((item) => `${item.name}: ${item.detail}`)
+        .join(" | ");
+      const protocolIssues = (result.raw?.protocol_evidence?.issues || []).join(", ");
+      const notes = [failedChecks || "none", protocolIssues || "none"].join(" / protocol: ");
+      return `
+        <tr>
+          <td>${escapeHtml(result.provider_name)}</td>
+          <td>${escapeHtml(result.case_id)}</td>
+          <td>${(result.sample_index || 0) + 1}</td>
+          <td><span class="badge ${escapeHtml(result.status)}">${escapeHtml(result.status)}</span></td>
+          <td>${formatNumber(result.score)}</td>
+          <td>${formatNumber(result.raw?.protocol_evidence?.protocol_score || 0)}</td>
+          <td>${escapeHtml(notes)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+function groupResultsByCase(results) {
+  const grouped = {};
+  results.forEach((result) => {
+    const providerGroup = grouped[result.provider_name] || (grouped[result.provider_name] = {});
+    const caseGroup = providerGroup[result.case_id] || (providerGroup[result.case_id] = []);
+    caseGroup.push(result);
+  });
+  Object.values(grouped).forEach((providerGroup) => {
+    Object.keys(providerGroup).forEach((caseId) => {
+      providerGroup[caseId] = providerGroup[caseId].sort((left, right) => (left.sample_index || 0) - (right.sample_index || 0));
+    });
+  });
+  return grouped;
 }
 
 function classifyRun(summary) {
@@ -306,6 +649,15 @@ function stopPolling() {
   }
 }
 
+function formatNumber(value) {
+  return Number(value || 0).toFixed(2);
+}
+
+function formatSignedNumber(value) {
+  const number = Number(value || 0);
+  return `${number >= 0 ? "+" : ""}${number.toFixed(2)}`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -314,4 +666,3 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 }
-

@@ -306,6 +306,7 @@ def _build_summary(
         )
         classification = _apply_protocol_adjustment(classification, protocol_summary)
         failures = _build_failure_notes(case_rollups)
+        critical_findings = _build_critical_findings(case_rollups)
 
         provider_summary = {
             "provider_name": provider.name,
@@ -323,6 +324,7 @@ def _build_summary(
             "style_variance_cases": style_variance_cases,
             "signal_summaries": signal_summaries,
             "protocol_summary": protocol_summary,
+            "critical_findings": critical_findings,
             "case_rollups": case_rollups,
             "classification": classification,
             "diagnosis": _diagnosis_for(
@@ -333,6 +335,7 @@ def _build_summary(
                 sample_count,
                 protocol_summary,
             ),
+            "evidence_trail": [],
             "comparison_summary": None,
         }
         provider_summaries.append(provider_summary)
@@ -360,6 +363,9 @@ def _build_summary(
             f"{provider_summary['diagnosis']} Baseline comparison vs {provider.baseline_provider}: "
             f"{comparison_summary['diagnosis']}"
         )
+
+    for provider_summary in provider_summaries:
+        provider_summary["evidence_trail"] = _build_evidence_trail(provider_summary)
 
     return {
         "run_id": run_id,
@@ -1064,6 +1070,156 @@ def _build_failure_notes(case_rollups: list[dict[str, Any]]) -> list[str]:
         if _is_instability_case(rollup["stability"]):
             notes.append(f"{rollup['case_id']}: {rollup['stability']}")
     return notes
+
+
+def _build_critical_findings(case_rollups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for rollup in case_rollups:
+        if not rollup["critical"]:
+            continue
+
+        if rollup["status"] != "passed":
+            findings.append(
+                {
+                    "kind": "behavior",
+                    "severity": "high",
+                    "case_id": rollup["case_id"],
+                    "case_title": rollup["case_title"],
+                    "signal": rollup["signal"],
+                    "detail": rollup["dominant_failures"][0] if rollup["dominant_failures"] else rollup["status"],
+                }
+            )
+
+        if _is_instability_case(rollup["stability"]):
+            findings.append(
+                {
+                    "kind": "stability",
+                    "severity": "high" if rollup["stability"] == "high_variance" else "medium",
+                    "case_id": rollup["case_id"],
+                    "case_title": rollup["case_title"],
+                    "signal": rollup["signal"],
+                    "detail": (
+                        f"{rollup['stability']} with pass rate {rollup['pass_rate']:.2f}"
+                    ),
+                }
+            )
+
+        protocol_summary = rollup["protocol_summary"]
+        if protocol_summary["alignment"] != "compatible":
+            findings.append(
+                {
+                    "kind": "protocol",
+                    "severity": "high" if protocol_summary["alignment"] == "major_drift" else "medium",
+                    "case_id": rollup["case_id"],
+                    "case_title": rollup["case_title"],
+                    "signal": rollup["signal"],
+                    "detail": protocol_summary["diagnosis"],
+                }
+            )
+
+    return findings
+
+
+def _build_evidence_trail(provider_summary: dict[str, Any]) -> list[dict[str, str]]:
+    trail: list[dict[str, str]] = []
+
+    if provider_summary["adjusted_score"] >= 0.9:
+        trail.append(
+            {
+                "level": "positive",
+                "title": "Behavior score stayed strong",
+                "detail": (
+                    f"Adjusted score {provider_summary['adjusted_score']:.2f} across "
+                    f"{provider_summary['passed_cases']}/{provider_summary['passed_cases'] + provider_summary['failed_cases']} cases."
+                ),
+            }
+        )
+    else:
+        trail.append(
+            {
+                "level": "negative",
+                "title": "Behavior score drifted",
+                "detail": (
+                    f"Adjusted score {provider_summary['adjusted_score']:.2f} with "
+                    f"{provider_summary['failed_cases']} failed cases."
+                ),
+            }
+        )
+
+    if provider_summary["critical_failures"]:
+        trail.append(
+            {
+                "level": "negative",
+                "title": "Critical behavior failures were detected",
+                "detail": f"{provider_summary['critical_failures']} critical cases did not pass cleanly.",
+            }
+        )
+
+    if provider_summary["unstable_cases"]:
+        trail.append(
+            {
+                "level": "warning",
+                "title": "Repeated sampling found instability",
+                "detail": (
+                    f"{provider_summary['unstable_cases']} unstable cases, including "
+                    f"{provider_summary['critical_unstable_cases']} critical."
+                ),
+            }
+        )
+    elif provider_summary["sample_count"] > 1:
+        trail.append(
+            {
+                "level": "positive",
+                "title": "Repeated sampling stayed stable",
+                "detail": f"{provider_summary['sample_count']} samples per case showed no critical instability.",
+            }
+        )
+
+    protocol_summary = provider_summary["protocol_summary"]
+    if protocol_summary["alignment"] == "compatible":
+        trail.append(
+            {
+                "level": "positive",
+                "title": "Protocol evidence matched expected shape",
+                "detail": f"Protocol score {protocol_summary['protocol_score']:.2f} with no flagged cases.",
+            }
+        )
+    else:
+        trail.append(
+            {
+                "level": "negative" if protocol_summary["alignment"] == "major_drift" else "warning",
+                "title": "Protocol evidence drifted",
+                "detail": protocol_summary["diagnosis"],
+            }
+        )
+
+    comparison_summary = provider_summary.get("comparison_summary")
+    if comparison_summary:
+        if comparison_summary["alignment"] == "aligned":
+            trail.append(
+                {
+                    "level": "positive",
+                    "title": "Baseline comparison aligned",
+                    "detail": comparison_summary["diagnosis"],
+                }
+            )
+        else:
+            trail.append(
+                {
+                    "level": "negative" if comparison_summary["alignment"] == "strong_drift" else "warning",
+                    "title": "Baseline comparison diverged",
+                    "detail": comparison_summary["diagnosis"],
+                }
+            )
+
+    trail.append(
+        {
+            "level": "neutral",
+            "title": "Final classification",
+            "detail": provider_summary["classification"],
+        }
+    )
+    return trail
 
 
 def _attempt_protocol_evidence(attempt: dict[str, Any]) -> dict[str, Any]:

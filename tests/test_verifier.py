@@ -56,6 +56,8 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertEqual(provider_summary["unstable_cases"], 0)
         self.assertEqual(provider_summary["protocol_summary"]["alignment"], "compatible")
         self.assertEqual(provider_summary["protocol_summary"]["flagged_cases"], 0)
+        self.assertTrue(provider_summary["evidence_trail"])
+        self.assertEqual(provider_summary["critical_findings"], [])
         self.assertTrue(provider_summary["signal_summaries"])
         self.assertTrue(provider_summary["case_rollups"])
         self.assertTrue(all(item["sample_count"] == 3 for item in provider_summary["case_rollups"]))
@@ -89,6 +91,8 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertGreaterEqual(provider_summary["critical_unstable_cases"], 1)
         self.assertEqual(provider_summary["comparison_summary"]["alignment"], "strong_drift")
         self.assertGreaterEqual(provider_summary["comparison_summary"]["mismatch_cases"], 1)
+        self.assertTrue(provider_summary["critical_findings"])
+        self.assertTrue(any(item["kind"] == "stability" for item in provider_summary["critical_findings"]))
 
     def test_protocol_drift_provider_is_flagged_even_when_behavior_matches(self) -> None:
         run_payload = self.service.run_sync(
@@ -103,6 +107,8 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertGreaterEqual(provider_summary["protocol_summary"]["missing_usage_cases"], 1)
         self.assertGreaterEqual(provider_summary["comparison_summary"]["mismatch_cases"], 1)
         self.assertEqual(provider_summary["comparison_summary"]["alignment"], "strong_drift")
+        self.assertTrue(any(item["kind"] == "protocol" for item in provider_summary["critical_findings"]))
+        self.assertTrue(any(item["title"] == "Protocol evidence drifted" for item in provider_summary["evidence_trail"]))
 
     def test_suspect_provider_classifies_as_behaviorally_inconsistent(self) -> None:
         run_payload = self.service.run_sync(
