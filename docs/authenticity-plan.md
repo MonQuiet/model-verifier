@@ -71,6 +71,17 @@ Deliverables:
 - show critical failures separately
 - show an explicit evidence trail for the final classification
 
+### Step 6: Evidence Workbench
+
+Status: `completed`
+
+Deliverables:
+
+- add run-detail filters for provider, classification, protocol alignment, text search, and critical-only review
+- add collapsible provider and case evidence sections for faster triage
+- add client-side exports for visible attempt rows plus scoped provider/case JSON snapshots
+- record progress in this document
+
 ## Progress Log
 
 ### 2026-04-17: Step 1 Completed
@@ -177,3 +188,23 @@ Impact:
 - reviewers can now see *why* a provider was classified a certain way without reading raw JSON by hand
 - critical failures are separated from lower-priority drift, which makes triage much faster
 - the UI now exposes the same repeat-sampling and evidence concepts that already existed in the backend
+
+### 2026-04-17: Step 6 Completed
+
+Implemented:
+
+- restored the web client and turned the Run Detail area into a filterable evidence workbench
+- added provider, classification, protocol, search, and critical-only filters that affect provider panels, case cards, and the global attempt log
+- added collapsible provider and case sections using native `details/summary`
+- added client-side exports for visible attempt rows as CSV plus per-provider and per-case JSON bundles
+
+Verified with:
+
+- `node --check web/app.js`
+- `python3 -m unittest discover -s tests`
+
+Impact:
+
+- reviewers can now slice the evidence down to one provider, one protocol drift pattern, or only high-risk cases without losing the surrounding context
+- large runs are now practical to review because provider and case sections can collapse into a concise triage surface
+- exports now let you hand off a filtered evidence slice instead of the full raw run every time
