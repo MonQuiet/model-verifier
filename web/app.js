@@ -222,6 +222,7 @@ function renderRunDetail(run) {
   detailSubtitleEl.textContent = `Run ${run.id} created ${run.created_at}`;
 
   const summary = run.summary || { provider_summaries: [] };
+  const reviewOverview = summary.review_overview || {};
   const groupedResults = groupResultsByCase(run.results || []);
   const view = buildRunView(run, summary, groupedResults, state.detailView);
   const providerPanels = view.visibleProviders.map((entry) => renderProviderPanel(entry)).join("");
@@ -244,6 +245,14 @@ function renderRunDetail(run) {
       <div class="summary-card">
         <span class="stat-label">Samples</span>
         <strong>${summary.sample_count || run.request?.sample_count || 1}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="stat-label">Policy</span>
+        <strong>${escapeHtml(summary.review_policy || "standard")}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="stat-label">High Risk</span>
+        <strong>${reviewOverview.high_risk_providers || 0}</strong>
       </div>
       <div class="summary-card">
         <span class="stat-label">Report</span>
@@ -341,11 +350,13 @@ function renderDetailToolbar(view) {
 function renderProviderPanel(entry) {
   const { provider, visibleCaseEntries, visibleCriticalFindings } = entry;
   const protocol = provider.protocol_summary || {};
+  const review = provider.review_summary || {};
   const evidenceTrail = renderEvidenceTrail(provider.evidence_trail || []);
   const criticalFindings = renderCriticalFindings(
     visibleCriticalFindings,
     "No critical findings match the current filters."
   );
+  const reviewReasons = renderReviewReasons(review.reasons || []);
   const comparison = renderComparisonSummary(provider.comparison_summary);
   const signalSummary = renderSignalSummary(provider.signal_summaries || []);
   const caseCards = visibleCaseEntries.map((caseEntry) => renderCaseCard(provider, caseEntry)).join("");
@@ -358,19 +369,21 @@ function renderProviderPanel(entry) {
         <div class="fold-title-block">
           <div class="provider-headline">
             <strong>${escapeHtml(provider.provider_name)}</strong>
+            <span class="badge badge-${escapeHtml(review.risk_level || "neutral")}">${escapeHtml(review.risk_level || "unknown")} risk</span>
             <span class="badge ${escapeHtml(provider.classification)}">${escapeHtml(provider.classification)}</span>
           </div>
-          <p class="provider-meta">${escapeHtml(provider.provider_model)} · avg score ${formatNumber(provider.average_score)} · adjusted ${formatNumber(provider.adjusted_score)} · protocol ${formatNumber(protocol.protocol_score || 0)}</p>
+          <p class="provider-meta">${escapeHtml(provider.provider_model)} · avg score ${formatNumber(provider.average_score)} · adjusted ${formatNumber(provider.adjusted_score)} · protocol ${formatNumber(protocol.protocol_score || 0)} · risk ${review.risk_score ?? 0} · ${escapeHtml(review.decision_confidence || "limited")} confidence</p>
         </div>
         <div class="fold-summary-side">
           <span class="mini-pill">${visibleCaseCount}/${totalCaseCount} cases</span>
           <span class="mini-pill">${provider.failed_cases} failed</span>
           <span class="mini-pill">${protocol.alignment || "unknown"} protocol</span>
+          <span class="mini-pill">${escapeHtml(humanizeToken(review.action || "pending"))}</span>
         </div>
       </summary>
       <div class="provider-fold-body">
         <div class="fold-action-row">
-          <p class="inline-note">Provider-level evidence trail, baseline deltas, and filtered case evidence.</p>
+          <p class="inline-note">${escapeHtml(review.recommendation || "Provider-level evidence trail, baseline deltas, and filtered case evidence.")}</p>
           <button type="button" class="ghost compact-button" data-provider-export="${escapeHtml(provider.provider_name)}">Export Provider JSON</button>
         </div>
 
@@ -384,6 +397,14 @@ function renderProviderPanel(entry) {
             <strong>${provider.critical_findings.length}</strong>
           </div>
           <div class="metric-card">
+            <span class="stat-label">Review Risk</span>
+            <strong>${escapeHtml(review.risk_level || "unknown")}</strong>
+          </div>
+          <div class="metric-card">
+            <span class="stat-label">Review Action</span>
+            <strong>${escapeHtml(humanizeToken(review.action || "pending"))}</strong>
+          </div>
+          <div class="metric-card">
             <span class="stat-label">Protocol Drift Cases</span>
             <strong>${protocol.flagged_cases || 0}</strong>
           </div>
@@ -392,6 +413,14 @@ function renderProviderPanel(entry) {
             <strong>${provider.critical_unstable_cases}</strong>
           </div>
         </div>
+
+        <section class="section-block">
+          <div class="section-mini-head">
+            <h3>Review Decision</h3>
+            <p class="muted">${escapeHtml((review.priority || "routine") + " priority")} · ${escapeHtml(review.policy || "standard")} policy</p>
+          </div>
+          ${reviewReasons}
+        </section>
 
         <div class="detail-columns">
           <section class="section-block">
@@ -474,6 +503,26 @@ function renderCriticalFindings(findings, emptyText = "No critical findings.") {
                 <span class="muted">${escapeHtml(finding.kind)} · ${escapeHtml(finding.signal)}</span>
               </div>
               <p>${escapeHtml(finding.detail)}</p>
+            </li>
+          `
+        )
+        .join("")}
+    </ul>
+  `;
+}
+
+function renderReviewReasons(reasons) {
+  if (!reasons.length) {
+    return '<div class="detail-empty">No review reasons recorded.</div>';
+  }
+
+  return `
+    <ul class="finding-list compact-findings">
+      ${reasons
+        .map(
+          (reason) => `
+            <li class="finding-item">
+              <p>${escapeHtml(reason)}</p>
             </li>
           `
         )

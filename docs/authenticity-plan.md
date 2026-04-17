@@ -82,6 +82,17 @@ Deliverables:
 - add client-side exports for visible attempt rows plus scoped provider/case JSON snapshots
 - record progress in this document
 
+### Step 7: Review Decision Policy
+
+Status: `completed`
+
+Deliverables:
+
+- turn evidence output into a policy-based review decision layer
+- expose risk level, review action, recommendation, and decision confidence
+- support `standard` and `strict` review policies for different trust thresholds
+- record progress in this document
+
 ## Progress Log
 
 ### 2026-04-17: Step 1 Completed
@@ -208,3 +219,24 @@ Impact:
 - reviewers can now slice the evidence down to one provider, one protocol drift pattern, or only high-risk cases without losing the surrounding context
 - large runs are now practical to review because provider and case sections can collapse into a concise triage surface
 - exports now let you hand off a filtered evidence slice instead of the full raw run every time
+
+### 2026-04-17: Step 7 Completed
+
+Implemented:
+
+- added a policy-based review summary on top of the existing authenticity evidence
+- added `risk_level`, `action`, `priority`, `recommendation`, and `decision_confidence` fields per provider
+- added `review_overview` and `review_policy` to run summaries
+- added `MODEL_VERIFIER_REVIEW_POLICY` with `standard` and `strict` modes
+- updated reports and UI-facing summary data to surface decision-layer output
+
+Verified with:
+
+- `python3 -m unittest discover -s tests`
+- `node --check web/app.js`
+
+Impact:
+
+- the system now produces an operational review decision instead of only a raw authenticity classification
+- strict environments can demand stronger evidence before accepting a claimed model label
+- reports and UI can now prioritize what to accept, what to resample, and what to block immediately

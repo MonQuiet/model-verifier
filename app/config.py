@@ -16,6 +16,7 @@ class Settings:
     providers_path: Path
     web_dir: Path
     allowed_origins: tuple[str, ...]
+    review_policy: str = "standard"
 
     @classmethod
     def from_env(cls, root_override: Path | None = None) -> "Settings":
@@ -35,6 +36,7 @@ class Settings:
             ).split(",")
             if origin.strip()
         )
+        review_policy = _read_review_policy(os.environ.get("MODEL_VERIFIER_REVIEW_POLICY", "standard"))
         return cls(
             root_dir=root_dir,
             host=host,
@@ -45,6 +47,7 @@ class Settings:
             providers_path=providers_path,
             web_dir=web_dir,
             allowed_origins=allowed_origins,
+            review_policy=review_policy,
         )
 
 
@@ -67,3 +70,9 @@ def _resolve_path(root_dir: Path, raw_value: str) -> Path:
         path = root_dir / path
     return path.resolve()
 
+
+def _read_review_policy(raw_value: str) -> str:
+    value = raw_value.strip().lower() or "standard"
+    if value not in {"standard", "strict"}:
+        raise ValueError(f"Unsupported MODEL_VERIFIER_REVIEW_POLICY: {raw_value}")
+    return value

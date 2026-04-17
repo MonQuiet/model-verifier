@@ -25,7 +25,12 @@ class VerificationServiceTests(unittest.TestCase):
         shutil.copy(REPO_ROOT / "providers.sample.json", self.root / "providers.sample.json")
         (self.root / "web" / "index.html").write_text("<h1>test</h1>", encoding="utf-8")
 
-        self.settings = Settings(
+        self.settings = self._make_settings()
+        ensure_runtime_paths(self.settings)
+        self.service = VerificationService(self.settings)
+
+    def _make_settings(self, review_policy: str = "standard") -> Settings:
+        return Settings(
             root_dir=self.root,
             host="127.0.0.1",
             port=8000,
@@ -35,9 +40,8 @@ class VerificationServiceTests(unittest.TestCase):
             providers_path=self.root / "providers.sample.json",
             web_dir=self.root / "web",
             allowed_origins=("http://127.0.0.1:8000",),
+            review_policy=review_policy,
         )
-        ensure_runtime_paths(self.settings)
-        self.service = VerificationService(self.settings)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -60,6 +64,8 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertEqual(provider_summary["critical_findings"], [])
         self.assertTrue(provider_summary["signal_summaries"])
         self.assertTrue(provider_summary["case_rollups"])
+        self.assertEqual(provider_summary["review_summary"]["risk_level"], "low")
+        self.assertEqual(provider_summary["review_summary"]["action"], "accept_with_monitoring")
         self.assertTrue(all(item["sample_count"] == 3 for item in provider_summary["case_rollups"]))
         self.assertTrue(Path(run_payload["report_path"]).exists())
         self.assertTrue(Path(run_payload["report_json_path"]).exists())
@@ -77,6 +83,8 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertEqual(provider_summary["comparison_summary"]["mismatch_cases"], 0)
         self.assertEqual(provider_summary["unstable_cases"], 0)
         self.assertEqual(provider_summary["protocol_summary"]["alignment"], "compatible")
+        self.assertEqual(provider_summary["review_summary"]["risk_level"], "low")
+        self.assertEqual(provider_summary["review_summary"]["action"], "accept_with_monitoring")
 
     def test_flaky_provider_is_flagged_for_repeat_sampling_instability(self) -> None:
         run_payload = self.service.run_sync(
@@ -93,6 +101,8 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertGreaterEqual(provider_summary["comparison_summary"]["mismatch_cases"], 1)
         self.assertTrue(provider_summary["critical_findings"])
         self.assertTrue(any(item["kind"] == "stability" for item in provider_summary["critical_findings"]))
+        self.assertEqual(provider_summary["review_summary"]["risk_level"], "critical")
+        self.assertEqual(provider_summary["review_summary"]["action"], "block_and_investigate")
 
     def test_protocol_drift_provider_is_flagged_even_when_behavior_matches(self) -> None:
         run_payload = self.service.run_sync(
@@ -109,6 +119,8 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertEqual(provider_summary["comparison_summary"]["alignment"], "strong_drift")
         self.assertTrue(any(item["kind"] == "protocol" for item in provider_summary["critical_findings"]))
         self.assertTrue(any(item["title"] == "Protocol evidence drifted" for item in provider_summary["evidence_trail"]))
+        self.assertEqual(provider_summary["review_summary"]["risk_level"], "critical")
+        self.assertEqual(provider_summary["review_summary"]["action"], "block_and_investigate")
 
     def test_suspect_provider_classifies_as_behaviorally_inconsistent(self) -> None:
         run_payload = self.service.run_sync(
@@ -121,6 +133,24 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertGreaterEqual(provider_summary["critical_failures"], 1)
         self.assertEqual(provider_summary["comparison_summary"]["alignment"], "strong_drift")
         self.assertGreaterEqual(provider_summary["comparison_summary"]["mismatch_cases"], 1)
+        self.assertEqual(provider_summary["review_summary"]["risk_level"], "critical")
+        self.assertEqual(provider_summary["review_summary"]["action"], "block_and_investigate")
+
+    def test_strict_policy_requires_more_sampling_before_accepting_clean_gateway(self) -> None:
+        strict_settings = self._make_settings(review_policy="strict")
+        strict_service = VerificationService(strict_settings)
+
+        run_payload = strict_service.run_sync(
+            provider_names=["mock-clean-gateway"],
+            case_ids=["json_contract", "context_memory", "refusal_boundary", "tool_plan_json"],
+            sample_count=1,
+        )
+
+        provider_summary = _summary_for(run_payload, "mock-clean-gateway")
+        self.assertEqual(run_payload["summary"]["review_policy"], "strict")
+        self.assertEqual(provider_summary["classification"], "likely_match")
+        self.assertEqual(provider_summary["review_summary"]["risk_level"], "medium")
+        self.assertEqual(provider_summary["review_summary"]["action"], "expand_sampling")
 
 
 def _summary_for(run_payload: dict, provider_name: str) -> dict:

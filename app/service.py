@@ -24,6 +24,20 @@ CRITICAL_PROTOCOL_ISSUES = {
     "invalid_tool_calls",
 }
 
+RISK_LEVEL_RANK = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+    "critical": 3,
+}
+
+PRIORITY_RANK = {
+    "routine": 0,
+    "priority": 1,
+    "urgent": 2,
+    "immediate": 3,
+}
+
 
 class VerificationService:
     def __init__(self, settings: Settings) -> None:
@@ -35,6 +49,7 @@ class VerificationService:
         providers = load_provider_configs(self.settings.providers_path)
         cases = load_cases(self.settings)
         return {
+            "review_policy": self.settings.review_policy,
             "providers": [
                 {
                     "name": provider.name,
@@ -208,7 +223,14 @@ class VerificationService:
                         db.insert_case_result(self.settings, record)
                         records.append(record)
 
-            summary = _build_summary(run_id, selected_providers, selected_cases, records, sample_count)
+            summary = _build_summary(
+                run_id,
+                selected_providers,
+                selected_cases,
+                records,
+                sample_count,
+                self.settings.review_policy,
+            )
             run_payload = self.get_run(run_id)
             if run_payload is None:
                 raise RuntimeError("Run disappeared before report generation.")
@@ -238,6 +260,7 @@ def _build_summary(
     selected_cases: list[dict[str, Any]],
     records: list[dict[str, Any]],
     sample_count: int,
+    review_policy: str,
 ) -> dict[str, Any]:
     provider_lookup = {provider.name: provider for provider in selected_providers}
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -325,6 +348,7 @@ def _build_summary(
             "signal_summaries": signal_summaries,
             "protocol_summary": protocol_summary,
             "critical_findings": critical_findings,
+            "failure_notes": failures,
             "case_rollups": case_rollups,
             "classification": classification,
             "diagnosis": _diagnosis_for(
@@ -337,6 +361,7 @@ def _build_summary(
             ),
             "evidence_trail": [],
             "comparison_summary": None,
+            "review_summary": None,
         }
         provider_summaries.append(provider_summary)
         provider_summary_lookup[provider.name] = provider_summary
@@ -365,14 +390,27 @@ def _build_summary(
         )
 
     for provider_summary in provider_summaries:
+        provider_summary["review_summary"] = _build_review_summary(provider_summary, review_policy)
+
+    provider_summaries.sort(
+        key=lambda item: (
+            -item["review_summary"]["priority_rank"],
+            -item["review_summary"]["risk_score"],
+            item["provider_name"],
+        )
+    )
+
+    for provider_summary in provider_summaries:
         provider_summary["evidence_trail"] = _build_evidence_trail(provider_summary)
 
     return {
         "run_id": run_id,
+        "review_policy": review_policy,
         "sample_count": sample_count,
         "total_providers": len(selected_providers),
         "total_cases": len(selected_cases),
         "total_results": len(records),
+        "review_overview": _build_run_review_overview(provider_summaries, review_policy),
         "provider_summaries": provider_summaries,
     }
 
@@ -1212,6 +1250,20 @@ def _build_evidence_trail(provider_summary: dict[str, Any]) -> list[dict[str, st
                 }
             )
 
+    review_summary = provider_summary.get("review_summary")
+    if review_summary:
+        trail.append(
+            {
+                "level": _risk_level_to_trail_level(review_summary["risk_level"]),
+                "title": "Review decision",
+                "detail": (
+                    f"{review_summary['risk_level']} risk · "
+                    f"{review_summary['action']} · "
+                    f"{review_summary['decision_confidence']} confidence"
+                ),
+            }
+        )
+
     trail.append(
         {
             "level": "neutral",
@@ -1220,6 +1272,237 @@ def _build_evidence_trail(provider_summary: dict[str, Any]) -> list[dict[str, st
         }
     )
     return trail
+
+
+def _build_review_summary(provider_summary: dict[str, Any], review_policy: str) -> dict[str, Any]:
+    risk_score = 0
+    reasons: list[str] = []
+
+    def add_risk(points: int, reason: str) -> None:
+        nonlocal risk_score
+        if points <= 0:
+            return
+        risk_score += points
+        reasons.append(reason)
+
+    classification = provider_summary["classification"]
+    if classification == "behaviorally_inconsistent":
+        add_risk(
+            58 if review_policy == "strict" else 55,
+            "Behavior classification is inconsistent with the claimed model.",
+        )
+    elif classification == "uncertain":
+        add_risk(
+            32 if review_policy == "strict" else 28,
+            "Weighted behavior evidence remained uncertain.",
+        )
+
+    if provider_summary["critical_failures"]:
+        add_risk(
+            min(28, 12 + (provider_summary["critical_failures"] - 1) * 6),
+            f"{provider_summary['critical_failures']} critical case(s) did not pass cleanly.",
+        )
+
+    if provider_summary["critical_unstable_cases"]:
+        add_risk(
+            min(22, 14 + (provider_summary["critical_unstable_cases"] - 1) * 4),
+            (
+                f"{provider_summary['critical_unstable_cases']} critical case(s) became unstable "
+                f"across {provider_summary['sample_count']} samples."
+            ),
+        )
+    elif provider_summary["unstable_cases"]:
+        add_risk(
+            12 if review_policy == "strict" else 8,
+            f"{provider_summary['unstable_cases']} non-critical case(s) were unstable across repeated sampling.",
+        )
+
+    protocol_summary = provider_summary["protocol_summary"]
+    if protocol_summary["alignment"] == "major_drift":
+        add_risk(
+            40 if review_policy == "strict" else 35,
+            "Protocol evidence shows major response-shape drift.",
+        )
+        if protocol_summary["critical_major_drift_cases"]:
+            add_risk(
+                min(18, 12 + (protocol_summary["critical_major_drift_cases"] - 1) * 4),
+                (
+                    f"{protocol_summary['critical_major_drift_cases']} critical case(s) showed "
+                    "major protocol drift."
+                ),
+            )
+    elif protocol_summary["alignment"] == "minor_drift":
+        add_risk(
+            18 if review_policy == "strict" else 14,
+            "Protocol evidence drifted from the expected upstream shape.",
+        )
+
+    comparison_summary = provider_summary.get("comparison_summary")
+    if comparison_summary:
+        if comparison_summary["alignment"] == "strong_drift":
+            add_risk(
+                34 if review_policy == "strict" else 30,
+                (
+                    f"Baseline comparison found {comparison_summary['mismatch_cases']} mismatched "
+                    "case(s)."
+                ),
+            )
+        elif comparison_summary["alignment"] == "partial_drift":
+            add_risk(
+                20 if review_policy == "strict" else 16,
+                (
+                    f"Baseline comparison found {comparison_summary['mismatch_cases']} partial-drift "
+                    "case(s)."
+                ),
+            )
+
+        if comparison_summary["critical_mismatch_cases"]:
+            add_risk(
+                min(18, 8 + (comparison_summary["critical_mismatch_cases"] - 1) * 4),
+                (
+                    f"{comparison_summary['critical_mismatch_cases']} critical case(s) diverged "
+                    "from the configured baseline."
+                ),
+            )
+    elif review_policy == "strict":
+        add_risk(8, "Strict policy penalizes verdicts without a configured baseline comparison.")
+
+    if provider_summary["sample_count"] == 1:
+        add_risk(
+            10 if review_policy == "strict" else 4,
+            "Only one sample per case was collected for this verdict.",
+        )
+    elif review_policy == "strict" and provider_summary["sample_count"] == 2:
+        add_risk(4, "Strict policy prefers at least three samples per case.")
+
+    risk_score = min(risk_score, 100)
+    risk_level = _risk_level_for_score(risk_score, review_policy)
+    action = _review_action_for(risk_level, provider_summary)
+    priority = _priority_for_risk(risk_level)
+    recommendation = _review_recommendation(action, provider_summary)
+
+    return {
+        "policy": review_policy,
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "risk_rank": RISK_LEVEL_RANK[risk_level],
+        "action": action,
+        "priority": priority,
+        "priority_rank": PRIORITY_RANK[priority],
+        "decision_confidence": _decision_confidence_for(provider_summary),
+        "recommendation": recommendation,
+        "reasons": reasons or ["Behavior, baseline, and protocol evidence stayed within expected bounds."],
+    }
+
+
+def _build_run_review_overview(provider_summaries: list[dict[str, Any]], review_policy: str) -> dict[str, Any]:
+    risk_counts = {level: 0 for level in RISK_LEVEL_RANK}
+    action_counts: dict[str, int] = defaultdict(int)
+
+    for provider_summary in provider_summaries:
+        review_summary = provider_summary["review_summary"]
+        risk_counts[review_summary["risk_level"]] += 1
+        action_counts[review_summary["action"]] += 1
+
+    top_priority_providers = [
+        {
+            "provider_name": provider_summary["provider_name"],
+            "classification": provider_summary["classification"],
+            "risk_level": provider_summary["review_summary"]["risk_level"],
+            "action": provider_summary["review_summary"]["action"],
+            "risk_score": provider_summary["review_summary"]["risk_score"],
+        }
+        for provider_summary in provider_summaries[:3]
+    ]
+
+    return {
+        "policy": review_policy,
+        "risk_counts": risk_counts,
+        "action_counts": dict(action_counts),
+        "high_risk_providers": risk_counts["high"] + risk_counts["critical"],
+        "top_priority_providers": top_priority_providers,
+    }
+
+
+def _risk_level_for_score(risk_score: int, review_policy: str) -> str:
+    if review_policy == "strict":
+        if risk_score >= 60:
+            return "critical"
+        if risk_score >= 30:
+            return "high"
+        if risk_score >= 10:
+            return "medium"
+        return "low"
+
+    if risk_score >= 75:
+        return "critical"
+    if risk_score >= 40:
+        return "high"
+    if risk_score >= 15:
+        return "medium"
+    return "low"
+
+
+def _review_action_for(risk_level: str, provider_summary: dict[str, Any]) -> str:
+    if risk_level == "low":
+        return "accept_with_monitoring"
+    if risk_level == "medium":
+        return "expand_sampling" if provider_summary["sample_count"] < 3 else "manual_review_required"
+    if risk_level == "high":
+        return "manual_review_required"
+    return "block_and_investigate"
+
+
+def _priority_for_risk(risk_level: str) -> str:
+    if risk_level == "low":
+        return "routine"
+    if risk_level == "medium":
+        return "priority"
+    if risk_level == "high":
+        return "urgent"
+    return "immediate"
+
+
+def _decision_confidence_for(provider_summary: dict[str, Any]) -> str:
+    evidence_units = 0
+
+    if provider_summary["sample_count"] >= 3:
+        evidence_units += 2
+    elif provider_summary["sample_count"] >= 2:
+        evidence_units += 1
+
+    if provider_summary.get("comparison_summary"):
+        evidence_units += 2
+
+    if provider_summary["protocol_summary"].get("protocol_score", 0.0) > 0:
+        evidence_units += 1
+
+    if evidence_units >= 5:
+        return "strong"
+    if evidence_units >= 3:
+        return "moderate"
+    return "limited"
+
+
+def _review_recommendation(action: str, provider_summary: dict[str, Any]) -> str:
+    if action == "accept_with_monitoring":
+        return "Accept the claimed label, but keep routine drift monitoring enabled."
+    if action == "expand_sampling":
+        return (
+            f"Increase repeat sampling beyond {provider_summary['sample_count']} sample(s) per case "
+            "before trusting the claimed label."
+        )
+    if action == "manual_review_required":
+        return "Review mismatched critical cases and protocol evidence before approving the claimed label."
+    return "Block the claimed label and investigate upstream routing or provider substitution."
+
+
+def _risk_level_to_trail_level(risk_level: str) -> str:
+    if risk_level == "low":
+        return "positive"
+    if risk_level == "medium":
+        return "warning"
+    return "negative"
 
 
 def _attempt_protocol_evidence(attempt: dict[str, Any]) -> dict[str, Any]:

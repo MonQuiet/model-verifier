@@ -631,8 +631,14 @@ h1 {
   background: rgba(144, 100, 41, 0.12);
 }
 
+.badge-low {
+  color: var(--ok);
+  background: rgba(43, 122, 86, 0.12);
+}
+
 .badge-negative,
-.badge-high {
+.badge-high,
+.badge-critical {
   color: var(--bad);
   background: rgba(166, 50, 50, 0.12);
 }

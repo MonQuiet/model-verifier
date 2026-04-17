@@ -30,7 +30,7 @@ The scoring model now uses weighted evidence and critical-signal gates. That mea
 
 ## Authenticity Roadmap
 
-The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Steps 1 through 5 are complete and establish:
+The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/model-verifier/docs/authenticity-plan.md). Steps 1 through 7 are complete and establish:
 
 - case-level signal groups
 - per-check weights
@@ -43,6 +43,8 @@ The implementation roadmap lives in [authenticity-plan.md](/home/debian/git/mode
 - protocol evidence capture for `usage`, `finish_reason`, content blocks, and `tool_calls`
 - protocol-level drift detection even when response text still looks correct
 - UI evidence views for signals, critical findings, protocol drift, and classification trail
+- an evidence workbench for filtering, collapsing, and exporting review slices
+- policy-based review decisions with risk level, action, and recommendation summaries
 
 ## Project Layout
 
@@ -128,6 +130,7 @@ Important variables:
 - `MODEL_VERIFIER_PORT`
 - `MODEL_VERIFIER_PROVIDERS`
 - `MODEL_VERIFIER_ALLOWED_ORIGINS`
+- `MODEL_VERIFIER_REVIEW_POLICY` (`standard` or `strict`)
 
 ## Provider Configuration
 
@@ -165,6 +168,14 @@ The verifier now also captures protocol evidence from the upstream response payl
 
 This makes it possible to flag gateways that imitate the right text while exposing a response protocol that does not match the claimed upstream model family.
 
+On top of the raw classification, the verifier now produces a policy-based review summary per provider:
+
+- `risk_level`: `low`, `medium`, `high`, or `critical`
+- `action`: `accept_with_monitoring`, `expand_sampling`, `manual_review_required`, or `block_and_investigate`
+- `decision_confidence`: `limited`, `moderate`, or `strong`
+
+Use `MODEL_VERIFIER_REVIEW_POLICY=strict` when you want the system to penalize single-sample verdicts more aggressively and require stronger evidence before accepting a claimed model label.
+
 ## API Surface
 
 - `GET /health`
@@ -177,6 +188,6 @@ This makes it possible to flag gateways that imitate the right text while exposi
 ## Notes
 
 - The current web UI uses polling instead of WebSocket/SSE to keep the runtime small.
-- The web UI now exposes `sample_count`, signal summaries, critical findings, and an explicit evidence trail for each provider classification.
+- The web UI now exposes `sample_count`, signal summaries, critical findings, explicit evidence trails, and policy-based review decisions.
 - Authentication is intentionally omitted in this MVP; the goal is to demonstrate the validation pipeline first.
 - Reports are written to `reports/` and run metadata is stored in `data/results.db`.

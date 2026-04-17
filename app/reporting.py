@@ -36,25 +36,47 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
         f"- Status: `{run_payload['status']}`",
         f"- Created At: `{run_payload['created_at']}`",
         f"- Updated At: `{run_payload['updated_at']}`",
+        f"- Review Policy: `{summary.get('review_policy', 'standard')}`",
         f"- Sample Count: `{summary.get('sample_count', 1)}`",
         "",
         "## Provider Summary",
         "",
-        "| Provider | Model | Weighted Score | Adjusted Score | Protocol | Protocol Score | Classification | Failed | Unstable |",
-        "| --- | --- | ---: | ---: | --- | ---: | --- | ---: | ---: |",
+        "| Provider | Model | Weighted Score | Adjusted Score | Protocol | Classification | Risk | Action | Failed | Unstable |",
+        "| --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: |",
     ]
+
+    review_overview = summary.get("review_overview") or {}
+    if review_overview:
+        lines.extend(
+            [
+                f"- High-Risk Providers: `{review_overview.get('high_risk_providers', 0)}`",
+                "",
+            ]
+        )
+        top_priority = review_overview.get("top_priority_providers") or []
+        if top_priority:
+            lines.extend(["### Review Queue", "", "| Provider | Classification | Risk | Action | Risk Score |", "| --- | --- | --- | --- | ---: |"])
+            for item in top_priority:
+                lines.append(
+                    "| {provider_name} | {classification} | {risk_level} | {action} | {risk_score} |".format(
+                        **item
+                    )
+                )
+            lines.extend(["", ""])
 
     for provider_summary in summary.get("provider_summaries", []):
         protocol_summary = provider_summary.get("protocol_summary") or {}
+        review_summary = provider_summary.get("review_summary") or {}
         lines.append(
-            "| {provider_name} | {provider_model} | {average_score:.2f} | {adjusted_score:.2f} | {protocol_alignment} | {protocol_score:.2f} | {classification} | {failed_cases} | {unstable_cases} |".format(
+            "| {provider_name} | {provider_model} | {average_score:.2f} | {adjusted_score:.2f} | {protocol_alignment} | {classification} | {risk_level} | {action} | {failed_cases} | {unstable_cases} |".format(
                 provider_name=provider_summary["provider_name"],
                 provider_model=provider_summary["provider_model"],
                 average_score=provider_summary["average_score"],
                 adjusted_score=provider_summary["adjusted_score"],
                 protocol_alignment=protocol_summary.get("alignment", "unknown"),
-                protocol_score=protocol_summary.get("protocol_score", 0.0),
                 classification=provider_summary["classification"],
+                risk_level=review_summary.get("risk_level", "unknown"),
+                action=review_summary.get("action", "pending"),
                 failed_cases=provider_summary["failed_cases"],
                 unstable_cases=provider_summary["unstable_cases"],
             )
@@ -64,11 +86,17 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
     for provider_summary in summary.get("provider_summaries", []):
         provider_name = provider_summary["provider_name"]
         protocol_summary = provider_summary.get("protocol_summary") or {}
+        review_summary = provider_summary.get("review_summary") or {}
         lines.extend(
             [
                 f"### {provider_name}",
                 "",
                 f"- Classification: `{provider_summary['classification']}`",
+                f"- Review Risk: `{review_summary.get('risk_level', 'unknown')}`",
+                f"- Review Action: `{review_summary.get('action', 'pending')}`",
+                f"- Review Priority: `{review_summary.get('priority', 'routine')}`",
+                f"- Review Confidence: `{review_summary.get('decision_confidence', 'limited')}`",
+                f"- Review Recommendation: {review_summary.get('recommendation', 'No recommendation available.')}",
                 f"- Weighted Score: `{provider_summary['average_score']:.2f}`",
                 f"- Stability-Adjusted Score: `{provider_summary['adjusted_score']:.2f}`",
                 f"- Stability Penalty: `{provider_summary['stability_penalty']:.2f}`",
@@ -87,6 +115,13 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
                 "",
             ]
         )
+
+        review_reasons = review_summary.get("reasons") or []
+        if review_reasons:
+            lines.extend(["#### Review Reasons", ""])
+            for reason in review_reasons:
+                lines.append(f"- {reason}")
+            lines.extend(["", ""])
 
         evidence_trail = provider_summary.get("evidence_trail", [])
         if evidence_trail:
