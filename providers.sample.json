@@ -33,5 +33,14 @@
     "baseline_provider": "mock-reference-gpt41",
     "behavior": "flaky",
     "temperature": 0
+  },
+  {
+    "name": "mock-protocol-gateway",
+    "type": "mock",
+    "base_url": "mock://protocol-drift",
+    "model": "gpt-4.1-mini",
+    "baseline_provider": "mock-reference-gpt41",
+    "behavior": "protocol_drift",
+    "temperature": 0
   }
 ]

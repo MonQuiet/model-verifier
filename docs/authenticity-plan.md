@@ -14,10 +14,9 @@ The target is not absolute proof. The target is a reproducible confidence judgme
 
 ## Current Gap
 
-The current implementation now covers weighted scoring, baseline pairing, and repeat sampling. The remaining structural limits are:
+The current implementation now covers weighted scoring, baseline pairing, repeat sampling, and protocol evidence. The remaining structural limit is:
 
-1. There is still no API-level evidence such as `usage`, `finish_reason`, or content-block/tool-call protocol shape.
-2. The web review surface still under-explains the evidence trail compared with the richer backend summary.
+1. The web review surface still under-explains the evidence trail compared with the richer backend summary.
 
 ## Roadmap
 
@@ -55,7 +54,7 @@ Deliverables:
 
 ### Step 4: API-Level Evidence
 
-Status: `pending`
+Status: `completed`
 
 Deliverables:
 
@@ -138,3 +137,24 @@ Impact:
 - the system can now separate “single-run looked fine” from “behavior stays consistent across repeated probes”
 - flaky upstream behavior now leaves a concrete trail: pass-rate drift, check flips, and stability penalties
 - the next step can add protocol evidence on top of a stronger behavioral baseline instead of a single-shot sample
+
+### 2026-04-17: Step 4 Completed
+
+Implemented:
+
+- protocol evidence capture in the provider layer for `usage`, `finish_reason`, content mode, content block types, and `tool_calls`
+- case-level protocol summaries with `compatible`, `minor_drift`, and `major_drift`
+- provider-level protocol summaries and classification adjustment
+- baseline mismatch reasons that now include protocol drift, usage coverage drift, and malformed tool-call evidence
+- deterministic `mock-protocol-gateway` coverage for regression tests
+
+Verified with:
+
+- `python3 -m unittest discover -s tests`
+- `python3 -m app.cli --providers mock-reference-gpt41,mock-protocol-gateway --cases json_contract,context_memory,refusal_boundary,tool_plan_json`
+
+Impact:
+
+- the system can now catch gateways that copy the right answer text while exposing the wrong response protocol
+- protocol evidence is now part of the final confidence judgment instead of being hidden in raw payloads
+- the remaining work can focus on review UX rather than backend evidence collection

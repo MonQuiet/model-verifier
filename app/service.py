@@ -15,6 +15,16 @@ from .providers.openai_compatible import ProviderConfig, generate_completion, lo
 from .reporting import write_reports
 
 
+CRITICAL_PROTOCOL_ISSUES = {
+    "missing_choices",
+    "missing_message",
+    "missing_content",
+    "missing_finish_reason",
+    "unsupported_content_block",
+    "invalid_tool_calls",
+}
+
+
 class VerificationService:
     def __init__(self, settings: Settings) -> None:
         ensure_runtime_paths(settings)
@@ -164,6 +174,18 @@ class VerificationService:
                             response_text = ""
                             raw = {
                                 "error": str(exc),
+                                "protocol_evidence": {
+                                    "protocol_score": 0.0,
+                                    "issues": ["request_error"],
+                                    "finish_reason": None,
+                                    "has_finish_reason": False,
+                                    "usage_present": False,
+                                    "usage_keys": [],
+                                    "content_mode": "missing",
+                                    "content_block_types": [],
+                                    "tool_call_shape": "none",
+                                    "tool_call_count": 0,
+                                },
                                 "sample_index": sample_index,
                                 "traceback": traceback.format_exc(limit=3),
                             }
@@ -227,6 +249,7 @@ def _build_summary(
     for provider in selected_providers:
         provider_records = grouped.get(provider.name, [])
         case_rollups = _build_case_rollups(provider_records)
+        protocol_summary = _build_provider_protocol_summary(case_rollups)
         total_cases = len(case_rollups)
         passed_cases = sum(1 for rollup in case_rollups if rollup["status"] == "passed")
         failed_cases = total_cases - passed_cases
@@ -281,6 +304,7 @@ def _build_summary(
             critical_unstable_cases,
             total_cases,
         )
+        classification = _apply_protocol_adjustment(classification, protocol_summary)
         failures = _build_failure_notes(case_rollups)
 
         provider_summary = {
@@ -298,6 +322,7 @@ def _build_summary(
             "critical_unstable_cases": critical_unstable_cases,
             "style_variance_cases": style_variance_cases,
             "signal_summaries": signal_summaries,
+            "protocol_summary": protocol_summary,
             "case_rollups": case_rollups,
             "classification": classification,
             "diagnosis": _diagnosis_for(
@@ -306,6 +331,7 @@ def _build_summary(
                 unstable_cases,
                 critical_unstable_cases,
                 sample_count,
+                protocol_summary,
             ),
             "comparison_summary": None,
         }
@@ -371,6 +397,7 @@ def _build_case_rollups(provider_records: list[dict[str, Any]]) -> list[dict[str
             }
         )
         check_flips = _build_check_flips(attempts)
+        protocol_summary = _build_case_protocol_summary(attempts, exemplar["evaluation"].get("critical", False))
         stability = _classify_case_stability(
             pass_count,
             sample_count,
@@ -405,6 +432,7 @@ def _build_case_rollups(provider_records: list[dict[str, Any]]) -> list[dict[str
                 "response_variants": response_variants,
                 "check_flips": check_flips,
                 "dominant_failures": _collect_failure_reasons(attempts),
+                "protocol_summary": protocol_summary,
                 "attempts": [
                     {
                         "sample_index": attempt.get("sample_index", 0),
@@ -416,6 +444,12 @@ def _build_case_rollups(provider_records: list[dict[str, Any]]) -> list[dict[str
                             for check in attempt["evaluation"].get("checks", [])
                             if not check.get("passed", False)
                         ],
+                        "protocol_score": _attempt_protocol_evidence(attempt)["protocol_score"],
+                        "finish_reason": _attempt_protocol_evidence(attempt)["finish_reason"] or "missing",
+                        "content_mode": _attempt_protocol_evidence(attempt)["content_mode"],
+                        "tool_call_shape": _attempt_protocol_evidence(attempt)["tool_call_shape"],
+                        "usage_present": _attempt_protocol_evidence(attempt)["usage_present"],
+                        "issues": _attempt_protocol_evidence(attempt)["issues"],
                     }
                     for attempt in attempts
                 ],
@@ -425,29 +459,188 @@ def _build_case_rollups(provider_records: list[dict[str, Any]]) -> list[dict[str
     return rollups
 
 
+def _build_case_protocol_summary(attempts: list[dict[str, Any]], critical: bool) -> dict[str, Any]:
+    evidences = [_attempt_protocol_evidence(attempt) for attempt in attempts]
+    sample_count = len(evidences)
+    protocol_score = round(
+        sum(evidence["protocol_score"] for evidence in evidences) / sample_count if sample_count else 0.0,
+        3,
+    )
+    issue_types = sorted({issue for evidence in evidences for issue in evidence.get("issues", [])})
+    critical_issue_types = sorted(issue for issue in issue_types if issue in CRITICAL_PROTOCOL_ISSUES)
+    issue_attempts = sum(1 for evidence in evidences if evidence.get("issues"))
+    usage_coverage = round(
+        sum(1 for evidence in evidences if evidence.get("usage_present")) / sample_count if sample_count else 0.0,
+        3,
+    )
+    finish_reason_coverage = round(
+        sum(1 for evidence in evidences if evidence.get("has_finish_reason")) / sample_count if sample_count else 0.0,
+        3,
+    )
+    finish_reason_markers = [evidence.get("finish_reason") or "missing" for evidence in evidences]
+    finish_reason_variants = len(set(finish_reason_markers))
+    content_modes = [evidence.get("content_mode", "missing") for evidence in evidences]
+    tool_call_shapes = [evidence.get("tool_call_shape", "none") for evidence in evidences]
+    shape_variance = len(set(content_modes)) > 1 or len(set(tool_call_shapes)) > 1 or finish_reason_variants > 1
+
+    if not issue_types:
+        alignment = "compatible"
+    elif critical_issue_types or protocol_score < (0.72 if critical else 0.65):
+        alignment = "major_drift"
+    else:
+        alignment = "minor_drift"
+
+    return {
+        "protocol_score": protocol_score,
+        "alignment": alignment,
+        "issue_attempts": issue_attempts,
+        "usage_coverage": usage_coverage,
+        "finish_reason_coverage": finish_reason_coverage,
+        "finish_reasons": sorted(set(finish_reason_markers)),
+        "dominant_finish_reason": _dominant_value(finish_reason_markers, "missing"),
+        "dominant_content_mode": _dominant_value(content_modes, "missing"),
+        "content_mode_variants": len(set(content_modes)),
+        "content_block_types": sorted(
+            {
+                block_type
+                for evidence in evidences
+                for block_type in evidence.get("content_block_types", [])
+            }
+        ),
+        "dominant_tool_call_shape": _dominant_value(tool_call_shapes, "none"),
+        "tool_call_shape_variants": len(set(tool_call_shapes)),
+        "tool_call_attempts": sum(1 for evidence in evidences if evidence.get("tool_call_count", 0) > 0),
+        "invalid_tool_call_attempts": sum(
+            1
+            for evidence in evidences
+            if evidence.get("tool_call_shape") in {"invalid", "mixed"}
+        ),
+        "issue_types": issue_types,
+        "critical_issue_types": critical_issue_types,
+        "shape_variance": shape_variance,
+        "diagnosis": _protocol_case_diagnosis(alignment, issue_types, issue_attempts, sample_count),
+    }
+
+
+def _build_provider_protocol_summary(case_rollups: list[dict[str, Any]]) -> dict[str, Any]:
+    total_case_weight = sum(rollup["case_weight"] for rollup in case_rollups)
+    protocol_score = round(
+        (
+            sum(rollup["protocol_summary"]["protocol_score"] * rollup["case_weight"] for rollup in case_rollups)
+            / total_case_weight
+        )
+        if total_case_weight
+        else 0.0,
+        3,
+    )
+    flagged_cases = sum(
+        1
+        for rollup in case_rollups
+        if rollup["protocol_summary"]["alignment"] != "compatible"
+    )
+    major_drift_cases = sum(
+        1
+        for rollup in case_rollups
+        if rollup["protocol_summary"]["alignment"] == "major_drift"
+    )
+    critical_major_drift_cases = sum(
+        1
+        for rollup in case_rollups
+        if rollup["critical"] and rollup["protocol_summary"]["alignment"] == "major_drift"
+    )
+    critical_cases_with_drift = sum(
+        1
+        for rollup in case_rollups
+        if rollup["critical"] and rollup["protocol_summary"]["alignment"] != "compatible"
+    )
+    missing_usage_cases = sum(
+        1 for rollup in case_rollups if rollup["protocol_summary"]["usage_coverage"] < 1.0
+    )
+    missing_finish_reason_cases = sum(
+        1 for rollup in case_rollups if rollup["protocol_summary"]["finish_reason_coverage"] < 1.0
+    )
+    invalid_tool_call_cases = sum(
+        1 for rollup in case_rollups if "invalid_tool_calls" in rollup["protocol_summary"]["issue_types"]
+    )
+    unsupported_content_block_cases = sum(
+        1
+        for rollup in case_rollups
+        if "unsupported_content_block" in rollup["protocol_summary"]["issue_types"]
+    )
+    issue_types = sorted(
+        {
+            issue
+            for rollup in case_rollups
+            for issue in rollup["protocol_summary"]["issue_types"]
+        }
+    )
+
+    if major_drift_cases >= 1 or protocol_score < 0.75:
+        alignment = "major_drift"
+    elif flagged_cases >= 1 or protocol_score < 0.95:
+        alignment = "minor_drift"
+    else:
+        alignment = "compatible"
+
+    return {
+        "protocol_score": protocol_score,
+        "alignment": alignment,
+        "flagged_cases": flagged_cases,
+        "major_drift_cases": major_drift_cases,
+        "critical_major_drift_cases": critical_major_drift_cases,
+        "critical_cases_with_drift": critical_cases_with_drift,
+        "missing_usage_cases": missing_usage_cases,
+        "missing_finish_reason_cases": missing_finish_reason_cases,
+        "invalid_tool_call_cases": invalid_tool_call_cases,
+        "unsupported_content_block_cases": unsupported_content_block_cases,
+        "issue_types": issue_types,
+        "diagnosis": _protocol_provider_diagnosis(
+            alignment,
+            protocol_score,
+            flagged_cases,
+            major_drift_cases,
+            issue_types,
+        ),
+    }
+
+
 def _diagnosis_for(
     classification: str,
     failures: list[str],
     unstable_cases: int,
     critical_unstable_cases: int,
     sample_count: int,
+    protocol_summary: dict[str, Any],
 ) -> str:
     if classification == "likely_match":
+        reasons = []
         if sample_count > 1:
-            return "Weighted evidence stayed strong across repeated samples and all critical signals."
-        return "Weighted evidence stayed strong across all critical signals."
+            reasons.append("Weighted evidence stayed strong across repeated samples.")
+        else:
+            reasons.append("Weighted evidence stayed strong.")
+        reasons.append("Protocol evidence matched expected OpenAI-compatible fields.")
+        return " ".join(reasons)
+
     if classification == "uncertain":
         reasons: list[str] = []
         if critical_unstable_cases:
             reasons.append(f"{critical_unstable_cases} critical cases drifted across repeated samples.")
         elif unstable_cases:
             reasons.append(f"{unstable_cases} cases showed instability across repeated samples.")
+        if protocol_summary["alignment"] != "compatible":
+            reasons.append(protocol_summary["diagnosis"])
         if failures:
             reasons.append("Review the first issues: " + "; ".join(failures[:2]))
         return "Mixed evidence detected. " + " ".join(reasons) if reasons else "Mixed signals detected without a decisive mismatch."
+
+    reasons = []
+    if protocol_summary["alignment"] == "major_drift":
+        reasons.append(protocol_summary["diagnosis"])
     if failures:
-        return "Critical evidence drift detected. Review failing cases: " + "; ".join(failures[:3])
-    return "Behavior diverged from the expected baseline."
+        reasons.append("Review failing cases: " + "; ".join(failures[:3]))
+    elif unstable_cases:
+        reasons.append(f"{unstable_cases} cases were unstable across repeated samples.")
+    return "Critical evidence drift detected. " + " ".join(reasons) if reasons else "Behavior diverged from the expected baseline."
 
 
 def _utc_now() -> str:
@@ -543,6 +736,8 @@ def _build_baseline_comparison_summary(
                 critical_mismatch_cases += 1
 
         baseline_score = baseline_rollup["adjusted_score"] if baseline_rollup else 0.0
+        baseline_protocol = baseline_rollup["protocol_summary"] if baseline_rollup else {}
+        provider_protocol = provider_rollup["protocol_summary"]
         case_deltas.append(
             {
                 "case_id": provider_rollup["case_id"],
@@ -556,6 +751,10 @@ def _build_baseline_comparison_summary(
                 "score_delta": round(provider_rollup["adjusted_score"] - baseline_score, 3),
                 "provider_stability": provider_rollup["stability"],
                 "baseline_stability": baseline_rollup["stability"] if baseline_rollup else "missing",
+                "provider_protocol_alignment": provider_protocol.get("alignment", "unknown"),
+                "baseline_protocol_alignment": baseline_protocol.get("alignment", "missing"),
+                "provider_protocol_score": provider_protocol.get("protocol_score", 0.0),
+                "baseline_protocol_score": baseline_protocol.get("protocol_score", 0.0),
                 "matched": matched,
                 "mismatch_reasons": mismatch_reasons,
             }
@@ -573,6 +772,11 @@ def _build_baseline_comparison_summary(
         provider_summary["stability_penalty"] - (baseline_summary["stability_penalty"] if baseline_summary else 0.0),
         3,
     )
+    protocol_score_delta = round(
+        provider_summary["protocol_summary"]["protocol_score"]
+        - (baseline_summary["protocol_summary"]["protocol_score"] if baseline_summary else 0.0),
+        3,
+    )
     alignment = _classify_baseline_alignment(weighted_score_delta, mismatch_cases, critical_mismatch_cases, signal_deltas)
 
     return {
@@ -581,6 +785,7 @@ def _build_baseline_comparison_summary(
         "alignment": alignment,
         "weighted_score_delta": weighted_score_delta,
         "stability_penalty_delta": stability_penalty_delta,
+        "protocol_score_delta": protocol_score_delta,
         "mismatch_cases": mismatch_cases,
         "critical_mismatch_cases": critical_mismatch_cases,
         "signal_deltas": signal_deltas,
@@ -591,6 +796,7 @@ def _build_baseline_comparison_summary(
             mismatch_cases,
             critical_mismatch_cases,
             stability_penalty_delta,
+            protocol_score_delta,
         ),
     }
 
@@ -620,6 +826,31 @@ def _build_case_mismatch_reasons(
     changed_flips = sorted(set(provider_rollup["check_flips"]) ^ set(baseline_rollup["check_flips"]))
     if changed_flips:
         reasons.append("check instability: " + ", ".join(changed_flips))
+
+    provider_protocol = provider_rollup["protocol_summary"]
+    baseline_protocol = baseline_rollup["protocol_summary"]
+    if provider_protocol["alignment"] != baseline_protocol["alignment"]:
+        reasons.append(
+            f"protocol drift: {baseline_protocol['alignment']} -> {provider_protocol['alignment']}"
+        )
+
+    protocol_delta = provider_protocol["protocol_score"] - baseline_protocol["protocol_score"]
+    if abs(protocol_delta) >= 0.15:
+        reasons.append(f"protocol delta {protocol_delta:+.2f}")
+
+    usage_delta = provider_protocol["usage_coverage"] - baseline_protocol["usage_coverage"]
+    if abs(usage_delta) >= 0.34:
+        reasons.append(f"usage coverage delta {usage_delta:+.2f}")
+
+    finish_reason_delta = provider_protocol["finish_reason_coverage"] - baseline_protocol["finish_reason_coverage"]
+    if abs(finish_reason_delta) >= 0.34:
+        reasons.append(f"finish_reason coverage delta {finish_reason_delta:+.2f}")
+
+    new_protocol_issues = sorted(
+        set(provider_protocol["issue_types"]) - set(baseline_protocol["issue_types"])
+    )
+    if new_protocol_issues:
+        reasons.append("protocol issues: " + ", ".join(new_protocol_issues[:3]))
 
     return reasons
 
@@ -670,22 +901,24 @@ def _comparison_diagnosis(
     mismatch_cases: int,
     critical_mismatch_cases: int,
     stability_penalty_delta: float,
+    protocol_score_delta: float,
 ) -> str:
     if alignment == "aligned":
         return (
-            f"Aligned with baseline. Adjusted delta {weighted_score_delta:+.2f} and "
+            f"Aligned with baseline. Adjusted delta {weighted_score_delta:+.2f}, "
+            f"protocol delta {protocol_score_delta:+.2f}, "
             f"stability penalty delta {stability_penalty_delta:+.2f}."
         )
     if alignment == "partial_drift":
         return (
             f"Partial drift detected. Adjusted delta {weighted_score_delta:+.2f}, "
-            f"{mismatch_cases} mismatched cases, {critical_mismatch_cases} critical, "
-            f"stability penalty delta {stability_penalty_delta:+.2f}."
+            f"protocol delta {protocol_score_delta:+.2f}, {mismatch_cases} mismatched cases, "
+            f"{critical_mismatch_cases} critical, stability penalty delta {stability_penalty_delta:+.2f}."
         )
     return (
         f"Strong drift detected. Adjusted delta {weighted_score_delta:+.2f}, "
-        f"{mismatch_cases} mismatched cases, {critical_mismatch_cases} critical, "
-        f"stability penalty delta {stability_penalty_delta:+.2f}."
+        f"protocol delta {protocol_score_delta:+.2f}, {mismatch_cases} mismatched cases, "
+        f"{critical_mismatch_cases} critical, stability penalty delta {stability_penalty_delta:+.2f}."
     )
 
 
@@ -711,6 +944,20 @@ def _apply_stability_adjustment(
         return "uncertain"
     if classification == "uncertain" and total_cases and unstable_cases >= max(2, total_cases // 2 + total_cases % 2):
         return "behaviorally_inconsistent"
+    return classification
+
+
+def _apply_protocol_adjustment(classification: str, protocol_summary: dict[str, Any]) -> str:
+    if classification == "behaviorally_inconsistent":
+        return classification
+    if protocol_summary["alignment"] == "major_drift":
+        if protocol_summary["critical_major_drift_cases"] >= 1 or protocol_summary["major_drift_cases"] >= 2:
+            return "behaviorally_inconsistent"
+        if classification == "likely_match":
+            return "uncertain"
+        return "behaviorally_inconsistent"
+    if protocol_summary["alignment"] == "minor_drift" and classification == "likely_match":
+        return "uncertain"
     return classification
 
 
@@ -785,8 +1032,14 @@ def _collect_failure_reasons(attempts: list[dict[str, Any]]) -> list[str]:
 def _build_failure_notes(case_rollups: list[dict[str, Any]]) -> list[str]:
     notes: list[str] = []
     for rollup in case_rollups:
-        if rollup["status"] == "passed" and not _is_instability_case(rollup["stability"]):
+        protocol_summary = rollup["protocol_summary"]
+        if (
+            rollup["status"] == "passed"
+            and not _is_instability_case(rollup["stability"])
+            and protocol_summary["alignment"] == "compatible"
+        ):
             continue
+
         if rollup["status"] == "flaky":
             detail = (
                 f"{rollup['case_id']}: unstable across {rollup['sample_count']} samples "
@@ -796,12 +1049,88 @@ def _build_failure_notes(case_rollups: list[dict[str, Any]]) -> list[str]:
                 detail += f", check flips: {', '.join(rollup['check_flips'])}"
             notes.append(detail)
             continue
+
         if rollup["dominant_failures"]:
             notes.append(f"{rollup['case_id']}: {rollup['dominant_failures'][0]}")
             continue
+
+        if protocol_summary["alignment"] != "compatible":
+            notes.append(
+                f"{rollup['case_id']}: protocol {protocol_summary['alignment']} "
+                f"({', '.join(protocol_summary['issue_types'][:2])})"
+            )
+            continue
+
         if _is_instability_case(rollup["stability"]):
             notes.append(f"{rollup['case_id']}: {rollup['stability']}")
     return notes
+
+
+def _attempt_protocol_evidence(attempt: dict[str, Any]) -> dict[str, Any]:
+    raw = attempt.get("raw") or {}
+    evidence = raw.get("protocol_evidence")
+    if isinstance(evidence, dict):
+        return evidence
+    return {
+        "protocol_score": 0.0,
+        "issues": ["missing_protocol_evidence"],
+        "finish_reason": None,
+        "has_finish_reason": False,
+        "usage_present": False,
+        "usage_keys": [],
+        "content_mode": "missing",
+        "content_block_types": [],
+        "tool_call_shape": "none",
+        "tool_call_count": 0,
+    }
+
+
+def _protocol_case_diagnosis(
+    alignment: str,
+    issue_types: list[str],
+    issue_attempts: int,
+    sample_count: int,
+) -> str:
+    if alignment == "compatible":
+        return "Protocol shape matched expected OpenAI-compatible response fields."
+    if alignment == "minor_drift":
+        return (
+            f"Minor protocol drift in {issue_attempts}/{sample_count} attempts: "
+            + ", ".join(issue_types[:3])
+        )
+    return (
+        f"Major protocol drift in {issue_attempts}/{sample_count} attempts: "
+        + ", ".join(issue_types[:4])
+    )
+
+
+def _protocol_provider_diagnosis(
+    alignment: str,
+    protocol_score: float,
+    flagged_cases: int,
+    major_drift_cases: int,
+    issue_types: list[str],
+) -> str:
+    if alignment == "compatible":
+        return "Protocol evidence matched expected OpenAI-compatible fields across all cases."
+    if alignment == "minor_drift":
+        return (
+            f"Minor protocol drift detected across {flagged_cases} cases. "
+            f"Protocol score {protocol_score:.2f}. Issues: {', '.join(issue_types[:3])}."
+        )
+    return (
+        f"Major protocol drift detected across {major_drift_cases} cases. "
+        f"Protocol score {protocol_score:.2f}. Issues: {', '.join(issue_types[:4])}."
+    )
+
+
+def _dominant_value(values: list[str], default: str) -> str:
+    if not values:
+        return default
+    counts: dict[str, int] = defaultdict(int)
+    for value in values:
+        counts[value] += 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
 
 
 def _response_fingerprint(value: str) -> str:

@@ -54,6 +54,8 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertEqual(provider_summary["classification"], "likely_match")
         self.assertEqual(provider_summary["critical_failures"], 0)
         self.assertEqual(provider_summary["unstable_cases"], 0)
+        self.assertEqual(provider_summary["protocol_summary"]["alignment"], "compatible")
+        self.assertEqual(provider_summary["protocol_summary"]["flagged_cases"], 0)
         self.assertTrue(provider_summary["signal_summaries"])
         self.assertTrue(provider_summary["case_rollups"])
         self.assertTrue(all(item["sample_count"] == 3 for item in provider_summary["case_rollups"]))
@@ -72,6 +74,7 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertEqual(provider_summary["comparison_summary"]["alignment"], "aligned")
         self.assertEqual(provider_summary["comparison_summary"]["mismatch_cases"], 0)
         self.assertEqual(provider_summary["unstable_cases"], 0)
+        self.assertEqual(provider_summary["protocol_summary"]["alignment"], "compatible")
 
     def test_flaky_provider_is_flagged_for_repeat_sampling_instability(self) -> None:
         run_payload = self.service.run_sync(
@@ -86,6 +89,20 @@ class VerificationServiceTests(unittest.TestCase):
         self.assertGreaterEqual(provider_summary["critical_unstable_cases"], 1)
         self.assertEqual(provider_summary["comparison_summary"]["alignment"], "strong_drift")
         self.assertGreaterEqual(provider_summary["comparison_summary"]["mismatch_cases"], 1)
+
+    def test_protocol_drift_provider_is_flagged_even_when_behavior_matches(self) -> None:
+        run_payload = self.service.run_sync(
+            provider_names=["mock-protocol-gateway"],
+            case_ids=["json_contract", "context_memory", "refusal_boundary", "tool_plan_json"],
+        )
+
+        provider_summary = _summary_for(run_payload, "mock-protocol-gateway")
+        self.assertEqual(provider_summary["classification"], "behaviorally_inconsistent")
+        self.assertEqual(provider_summary["protocol_summary"]["alignment"], "major_drift")
+        self.assertGreaterEqual(provider_summary["protocol_summary"]["major_drift_cases"], 1)
+        self.assertGreaterEqual(provider_summary["protocol_summary"]["missing_usage_cases"], 1)
+        self.assertGreaterEqual(provider_summary["comparison_summary"]["mismatch_cases"], 1)
+        self.assertEqual(provider_summary["comparison_summary"]["alignment"], "strong_drift")
 
     def test_suspect_provider_classifies_as_behaviorally_inconsistent(self) -> None:
         run_payload = self.service.run_sync(

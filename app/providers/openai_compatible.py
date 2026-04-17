@@ -10,6 +10,21 @@ import urllib.error
 import urllib.request
 
 
+EXPECTED_FINISH_REASONS = {"stop", "length", "tool_calls", "content_filter"}
+PROTOCOL_PENALTIES = {
+    "missing_choices": 0.35,
+    "missing_message": 0.25,
+    "missing_content": 0.2,
+    "missing_usage": 0.12,
+    "incomplete_usage": 0.08,
+    "missing_finish_reason": 0.15,
+    "unexpected_finish_reason": 0.08,
+    "unsupported_content_block": 0.18,
+    "invalid_tool_calls": 0.2,
+}
+SUPPORTED_CONTENT_BLOCK_TYPES = {"text", "output_text", "input_text"}
+
+
 @dataclass(frozen=True)
 class ProviderConfig:
     name: str
@@ -71,22 +86,35 @@ def select_providers(all_providers: list[ProviderConfig], provider_names: list[s
 
 def generate_completion(provider: ProviderConfig, case: dict[str, Any], sample_index: int = 0) -> dict[str, Any]:
     started = time.perf_counter()
-    if provider.provider_type == "mock":
-        raw_payload = _mock_completion(provider, case, sample_index)
-        latency_ms = round((time.perf_counter() - started) * 1000, 2)
-        return {
-            "text": raw_payload["text"],
-            "latency_ms": latency_ms,
-            "provider_type": provider.provider_type,
-            "request_body": {"messages": case["messages"], "model": provider.model},
-            "raw_response": raw_payload,
-        }
 
+    if provider.provider_type == "mock":
+        payload = _mock_completion(provider, case, sample_index)
+    else:
+        request_body = {
+            "model": provider.model,
+            "messages": case["messages"],
+            "temperature": provider.temperature,
+        }
+        payload = _request_completion(provider, request_body)
+
+    latency_ms = round((time.perf_counter() - started) * 1000, 2)
     request_body = {
-        "model": provider.model,
         "messages": case["messages"],
+        "model": provider.model,
         "temperature": provider.temperature,
     }
+    text, protocol_evidence = _parse_protocol_evidence(payload)
+    return {
+        "text": text,
+        "latency_ms": latency_ms,
+        "provider_type": provider.provider_type,
+        "request_body": request_body,
+        "raw_response": payload,
+        "protocol_evidence": protocol_evidence,
+    }
+
+
+def _request_completion(provider: ProviderConfig, request_body: dict[str, Any]) -> dict[str, Any]:
     endpoint = provider.base_url.rstrip("/") + "/chat/completions"
     encoded_body = json.dumps(request_body).encode("utf-8")
     headers = {
@@ -108,39 +136,218 @@ def generate_completion(provider: ProviderConfig, case: dict[str, Any], sample_i
         raise RuntimeError(f"HTTP {exc.code} from provider {provider.name}: {error_body}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Network error for provider {provider.name}: {exc.reason}") from exc
-
-    latency_ms = round((time.perf_counter() - started) * 1000, 2)
-    message = payload["choices"][0]["message"]
-    content = message.get("content", "")
-    if isinstance(content, list):
-        parts = [part.get("text", "") for part in content if isinstance(part, dict)]
-        text = "\n".join(part for part in parts if part)
-    else:
-        text = str(content)
-
-    return {
-        "text": text,
-        "latency_ms": latency_ms,
-        "provider_type": provider.provider_type,
-        "request_body": request_body,
-        "raw_response": payload,
-    }
+    if not isinstance(payload, dict):
+        return {"payload": payload}
+    return payload
 
 
 def _mock_completion(provider: ProviderConfig, case: dict[str, Any], sample_index: int) -> dict[str, Any]:
-    if provider.behavior == "reference":
-        text = _REFERENCE_RESPONSES.get(case["id"], "unhandled case")
-    elif provider.behavior == "flaky":
-        variants = _FLAKY_RESPONSES.get(case["id"], [_REFERENCE_RESPONSES.get(case["id"], "unhandled case")])
-        text = variants[sample_index % len(variants)]
-    else:
-        text = _SUSPECT_RESPONSES.get(case["id"], "unhandled case")
-    return {
+    response_text = _mock_response_text(provider, case, sample_index)
+    usage = _mock_usage(case, response_text)
+    payload = {
+        "id": f"mockcmpl-{provider.name}-{case['id']}-{sample_index}",
+        "object": "chat.completion",
+        "model": provider.model,
         "provider": provider.name,
         "behavior": provider.behavior,
-        "case_id": case["id"],
-        "sample_index": sample_index,
-        "text": text,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": response_text,
+                },
+            }
+        ],
+        "usage": usage,
+    }
+    if provider.behavior == "protocol_drift":
+        return _mock_protocol_drift_payload(provider, case, sample_index, response_text)
+    return payload
+
+
+def _mock_response_text(provider: ProviderConfig, case: dict[str, Any], sample_index: int) -> str:
+    if provider.behavior in {"reference", "protocol_drift"}:
+        return _REFERENCE_RESPONSES.get(case["id"], "unhandled case")
+    if provider.behavior == "flaky":
+        variants = _FLAKY_RESPONSES.get(case["id"], [_REFERENCE_RESPONSES.get(case["id"], "unhandled case")])
+        return variants[sample_index % len(variants)]
+    return _SUSPECT_RESPONSES.get(case["id"], "unhandled case")
+
+
+def _mock_protocol_drift_payload(
+    provider: ProviderConfig,
+    case: dict[str, Any],
+    sample_index: int,
+    response_text: str,
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "reasoning",
+                "text": "Internal planning metadata that should not appear in an OpenAI-compatible text payload.",
+            },
+            {
+                "type": "text",
+                "text": response_text,
+            },
+        ],
+    }
+    if case["id"] == "tool_plan_json":
+        message["tool_calls"] = [
+            {
+                "type": "function",
+                "function": {
+                    "arguments": "{\"ticket_id\":\"INC-2048\"}",
+                },
+            }
+        ]
+
+    return {
+        "id": f"mockcmpl-{provider.name}-{case['id']}-{sample_index}",
+        "object": "chat.completion",
+        "model": provider.model,
+        "provider": provider.name,
+        "behavior": provider.behavior,
+        "choices": [
+            {
+                "index": 0,
+                "message": message,
+            }
+        ],
+    }
+
+
+def _parse_protocol_evidence(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    issues: list[str] = []
+    choices = payload.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    if choice is None:
+        issues.append("missing_choices")
+        choice = {}
+
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        issues.append("missing_message")
+        message = {}
+
+    text, content_mode, content_block_types, content_issues = _extract_content(message.get("content"))
+    issues.extend(content_issues)
+
+    finish_reason = choice.get("finish_reason")
+    if not isinstance(finish_reason, str) or not finish_reason:
+        finish_reason_value = None
+        issues.append("missing_finish_reason")
+    else:
+        finish_reason_value = finish_reason
+        if finish_reason_value not in EXPECTED_FINISH_REASONS:
+            issues.append("unexpected_finish_reason")
+
+    usage = payload.get("usage")
+    usage_present = isinstance(usage, dict)
+    usage_keys = sorted(usage.keys()) if usage_present else []
+    if not usage_present:
+        issues.append("missing_usage")
+    else:
+        required_usage_keys = {"prompt_tokens", "completion_tokens", "total_tokens"}
+        if not required_usage_keys.issubset(set(usage_keys)):
+            issues.append("incomplete_usage")
+
+    tool_calls = message.get("tool_calls")
+    tool_call_shape, tool_call_count, tool_call_issues = _inspect_tool_calls(tool_calls)
+    issues.extend(tool_call_issues)
+
+    unique_issues = sorted(set(issues))
+    protocol_score = round(max(1.0 - sum(PROTOCOL_PENALTIES.get(issue, 0.0) for issue in unique_issues), 0.0), 3)
+    return text, {
+        "protocol_score": protocol_score,
+        "issues": unique_issues,
+        "finish_reason": finish_reason_value,
+        "has_finish_reason": finish_reason_value is not None,
+        "usage_present": usage_present,
+        "usage_keys": usage_keys,
+        "content_mode": content_mode,
+        "content_block_types": content_block_types,
+        "tool_call_shape": tool_call_shape,
+        "tool_call_count": tool_call_count,
+    }
+
+
+def _extract_content(content: Any) -> tuple[str, str, list[str], list[str]]:
+    issues: list[str] = []
+    if isinstance(content, str):
+        if content.strip():
+            return content, "text", [], issues
+        issues.append("missing_content")
+        return "", "missing", [], issues
+
+    if not isinstance(content, list):
+        issues.append("missing_content")
+        return "", "missing", [], issues
+
+    parts: list[str] = []
+    block_types: list[str] = []
+    unsupported = False
+    for block in content:
+        if not isinstance(block, dict):
+            unsupported = True
+            continue
+        block_type = str(block.get("type", "unknown"))
+        block_types.append(block_type)
+        if block_type in SUPPORTED_CONTENT_BLOCK_TYPES and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+            continue
+        unsupported = True
+
+    if unsupported:
+        issues.append("unsupported_content_block")
+    text = "\n".join(part for part in parts if part)
+    if not text.strip():
+        issues.append("missing_content")
+    return text, "blocks", sorted(set(block_types)), issues
+
+
+def _inspect_tool_calls(tool_calls: Any) -> tuple[str, int, list[str]]:
+    if tool_calls is None:
+        return "none", 0, []
+    if not isinstance(tool_calls, list):
+        return "invalid", 0, ["invalid_tool_calls"]
+
+    invalid_calls = 0
+    valid_calls = 0
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            invalid_calls += 1
+            continue
+        function_payload = call.get("function")
+        is_valid = (
+            call.get("type") == "function"
+            and isinstance(call.get("id"), str)
+            and isinstance(function_payload, dict)
+            and isinstance(function_payload.get("name"), str)
+            and isinstance(function_payload.get("arguments"), str)
+        )
+        if is_valid:
+            valid_calls += 1
+        else:
+            invalid_calls += 1
+
+    if invalid_calls and valid_calls:
+        return "mixed", len(tool_calls), ["invalid_tool_calls"]
+    if invalid_calls:
+        return "invalid", len(tool_calls), ["invalid_tool_calls"]
+    return "valid", len(tool_calls), []
+
+
+def _mock_usage(case: dict[str, Any], response_text: str) -> dict[str, int]:
+    prompt_tokens = max(sum(len(message.get("content", "").split()) for message in case["messages"]), 1)
+    completion_tokens = max(len(response_text.split()), 1)
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
     }
 
 

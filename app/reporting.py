@@ -40,20 +40,30 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
         "",
         "## Provider Summary",
         "",
-        "| Provider | Model | Weighted Score | Adjusted Score | Classification | Failed | Unstable |",
-        "| --- | --- | ---: | ---: | --- | ---: | ---: |",
+        "| Provider | Model | Weighted Score | Adjusted Score | Protocol | Protocol Score | Classification | Failed | Unstable |",
+        "| --- | --- | ---: | ---: | --- | ---: | --- | ---: | ---: |",
     ]
 
     for provider_summary in summary.get("provider_summaries", []):
+        protocol_summary = provider_summary.get("protocol_summary") or {}
         lines.append(
-            "| {provider_name} | {provider_model} | {average_score:.2f} | {adjusted_score:.2f} | {classification} | {failed_cases} | {unstable_cases} |".format(
-                **provider_summary
+            "| {provider_name} | {provider_model} | {average_score:.2f} | {adjusted_score:.2f} | {protocol_alignment} | {protocol_score:.2f} | {classification} | {failed_cases} | {unstable_cases} |".format(
+                provider_name=provider_summary["provider_name"],
+                provider_model=provider_summary["provider_model"],
+                average_score=provider_summary["average_score"],
+                adjusted_score=provider_summary["adjusted_score"],
+                protocol_alignment=protocol_summary.get("alignment", "unknown"),
+                protocol_score=protocol_summary.get("protocol_score", 0.0),
+                classification=provider_summary["classification"],
+                failed_cases=provider_summary["failed_cases"],
+                unstable_cases=provider_summary["unstable_cases"],
             )
         )
 
     lines.extend(["", "## Case Details", ""])
     for provider_summary in summary.get("provider_summaries", []):
         provider_name = provider_summary["provider_name"]
+        protocol_summary = provider_summary.get("protocol_summary") or {}
         lines.extend(
             [
                 f"### {provider_name}",
@@ -62,10 +72,17 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
                 f"- Weighted Score: `{provider_summary['average_score']:.2f}`",
                 f"- Stability-Adjusted Score: `{provider_summary['adjusted_score']:.2f}`",
                 f"- Stability Penalty: `{provider_summary['stability_penalty']:.2f}`",
+                f"- Protocol Alignment: `{protocol_summary.get('alignment', 'unknown')}`",
+                f"- Protocol Score: `{protocol_summary.get('protocol_score', 0.0):.2f}`",
+                f"- Protocol Diagnosis: {protocol_summary.get('diagnosis', 'No protocol diagnosis available.')}",
                 f"- Critical Failures: `{provider_summary['critical_failures']}`",
                 f"- Unstable Cases: `{provider_summary['unstable_cases']}`",
                 f"- Critical Unstable Cases: `{provider_summary['critical_unstable_cases']}`",
                 f"- Style Variance Cases: `{provider_summary['style_variance_cases']}`",
+                f"- Missing Usage Cases: `{protocol_summary.get('missing_usage_cases', 0)}`",
+                f"- Missing Finish Reason Cases: `{protocol_summary.get('missing_finish_reason_cases', 0)}`",
+                f"- Invalid Tool Call Cases: `{protocol_summary.get('invalid_tool_call_cases', 0)}`",
+                f"- Unsupported Content Block Cases: `{protocol_summary.get('unsupported_content_block_cases', 0)}`",
                 f"- Diagnosis: {provider_summary['diagnosis']}",
                 "",
             ]
@@ -79,6 +96,7 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
                     f"- Baseline Model: `{comparison_summary['baseline_provider_model']}`",
                     f"- Baseline Alignment: `{comparison_summary['alignment']}`",
                     f"- Adjusted Delta vs Baseline: `{comparison_summary['weighted_score_delta']:+.2f}`",
+                    f"- Protocol Delta vs Baseline: `{comparison_summary['protocol_score_delta']:+.2f}`",
                     f"- Stability Penalty Delta: `{comparison_summary['stability_penalty_delta']:+.2f}`",
                     f"- Baseline Diagnosis: {comparison_summary['diagnosis']}",
                     "",
@@ -106,19 +124,21 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
             if mismatched_case_deltas:
                 lines.extend(
                     [
-                        "| Case | Signal | Provider | Baseline | Delta | Reasons |",
-                        "| --- | --- | --- | --- | ---: | --- |",
+                        "| Case | Signal | Provider | Baseline | Protocol | Delta | Reasons |",
+                        "| --- | --- | --- | --- | --- | ---: | --- |",
                     ]
                 )
                 for case_delta in mismatched_case_deltas:
                     lines.append(
-                        "| {case_id} | {signal} | {provider_status}/{provider_stability} | {baseline_status}/{baseline_stability} | {score_delta:+.2f} | {reasons} |".format(
+                        "| {case_id} | {signal} | {provider_status}/{provider_stability} | {baseline_status}/{baseline_stability} | {provider_protocol_alignment}/{baseline_protocol_alignment} | {score_delta:+.2f} | {reasons} |".format(
                             case_id=case_delta["case_id"],
                             signal=case_delta["signal"],
                             provider_status=case_delta["provider_status"],
                             provider_stability=case_delta["provider_stability"],
                             baseline_status=case_delta["baseline_status"],
                             baseline_stability=case_delta["baseline_stability"],
+                            provider_protocol_alignment=case_delta["provider_protocol_alignment"],
+                            baseline_protocol_alignment=case_delta["baseline_protocol_alignment"],
                             score_delta=case_delta["score_delta"],
                             reasons="; ".join(case_delta["mismatch_reasons"]),
                         )
@@ -145,30 +165,45 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
         if case_rollups:
             lines.extend(
                 [
-                    "| Case | Status | Stability | Pass Rate | Avg Score | Adjusted | Spread | Variants |",
-                    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+                    "| Case | Status | Stability | Protocol | Pass Rate | Avg Score | Adjusted | Protocol Score |",
+                    "| --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
                 ]
             )
             for case_rollup in case_rollups:
                 lines.append(
-                    "| {case_id} | {status} | {stability} | {pass_rate:.2f} | {average_score:.2f} | {adjusted_score:.2f} | {score_spread:.2f} | {response_variants} |".format(
-                        **case_rollup
+                    "| {case_id} | {status} | {stability} | {protocol_alignment} | {pass_rate:.2f} | {average_score:.2f} | {adjusted_score:.2f} | {protocol_score:.2f} |".format(
+                        case_id=case_rollup["case_id"],
+                        status=case_rollup["status"],
+                        stability=case_rollup["stability"],
+                        protocol_alignment=case_rollup["protocol_summary"]["alignment"],
+                        pass_rate=case_rollup["pass_rate"],
+                        average_score=case_rollup["average_score"],
+                        adjusted_score=case_rollup["adjusted_score"],
+                        protocol_score=case_rollup["protocol_summary"]["protocol_score"],
                     )
                 )
             lines.extend(["", ""])
 
         for case_rollup in case_rollups:
             case = case_lookup.get(case_rollup["case_id"], {})
+            case_protocol = case_rollup["protocol_summary"]
             lines.extend(
                 [
                     f"#### {case_rollup['case_title']} (`{case_rollup['case_id']}`)",
                     "",
                     f"- Status: `{case_rollup['status']}`",
                     f"- Stability: `{case_rollup['stability']}`",
+                    f"- Protocol Alignment: `{case_protocol['alignment']}`",
+                    f"- Protocol Score: `{case_protocol['protocol_score']:.2f}`",
+                    f"- Protocol Diagnosis: {case_protocol['diagnosis']}",
                     f"- Pass Rate: `{case_rollup['pass_rate']:.2f}`",
                     f"- Average Score: `{case_rollup['average_score']:.2f}`",
                     f"- Adjusted Score: `{case_rollup['adjusted_score']:.2f}`",
                     f"- Stability Penalty: `{case_rollup['stability_penalty']:.2f}`",
+                    f"- Usage Coverage: `{case_protocol['usage_coverage']:.2f}`",
+                    f"- Finish Reason Coverage: `{case_protocol['finish_reason_coverage']:.2f}`",
+                    f"- Dominant Content Mode: `{case_protocol['dominant_content_mode']}`",
+                    f"- Dominant Tool Call Shape: `{case_protocol['dominant_tool_call_shape']}`",
                     f"- Score Range: `{case_rollup['min_score']:.2f}` -> `{case_rollup['max_score']:.2f}`",
                     f"- Response Variants: `{case_rollup['response_variants']}`",
                     f"- Goal: {case.get('description', 'No description provided.')}",
@@ -180,6 +215,11 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
             else:
                 lines.append("- Check Flips: none")
 
+            if case_protocol["issue_types"]:
+                lines.append(f"- Protocol Issues: {', '.join(case_protocol['issue_types'])}")
+            else:
+                lines.append("- Protocol Issues: none")
+
             if case_rollup["dominant_failures"]:
                 lines.append(f"- Failure Signals: {'; '.join(case_rollup['dominant_failures'])}")
             else:
@@ -188,19 +228,25 @@ def _build_markdown(run_payload: dict[str, Any], selected_cases: list[dict[str, 
             lines.extend(
                 [
                     "",
-                    "| Sample | Status | Score | Latency | Failed Checks |",
-                    "| ---: | --- | ---: | ---: | --- |",
+                    "| Sample | Status | Score | Protocol | Finish | Content | Tool Calls | Usage | Failed Checks | Issues |",
+                    "| ---: | --- | ---: | ---: | --- | --- | --- | --- | --- | --- |",
                 ]
             )
             for attempt in case_rollup.get("attempts", []):
                 failed_checks = ", ".join(attempt.get("failed_checks", [])) or "none"
+                issues = ", ".join(attempt.get("issues", [])) or "none"
                 lines.append(
-                    "| {sample} | {status} | {score:.2f} | {latency} ms | {failed_checks} |".format(
+                    "| {sample} | {status} | {score:.2f} | {protocol_score:.2f} | {finish_reason} | {content_mode} | {tool_call_shape} | {usage_present} | {failed_checks} | {issues} |".format(
                         sample=attempt["sample_index"] + 1,
                         status=attempt["status"],
                         score=attempt["score"],
-                        latency=attempt["latency_ms"],
+                        protocol_score=attempt["protocol_score"],
+                        finish_reason=attempt["finish_reason"],
+                        content_mode=attempt["content_mode"],
+                        tool_call_shape=attempt["tool_call_shape"],
+                        usage_present="yes" if attempt["usage_present"] else "no",
                         failed_checks=failed_checks,
+                        issues=issues,
                     )
                 )
             lines.extend(["", ""])
